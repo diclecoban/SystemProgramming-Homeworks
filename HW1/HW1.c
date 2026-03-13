@@ -3,7 +3,6 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -43,9 +42,14 @@ void parse_criteria(int arg_count, char *arg_list[], struct criteria *my_criteri
             case 'f': my_criteria->filename = optarg; break; 
             case 'b': my_criteria->size = atoi(optarg); break; //atoi = ascii to integer
             case 't': my_criteria->type = optarg[0]; break;
-            case 'p': my_criteria->permissions = optarg; break;
+            case 'p': 
+                if(strlen(optarg) != 9) {
+                    fprintf(stderr, "Invalid permissions format. Use 9 characters (e.g. rwxr-xr--)\n");
+                    exit(1);
+                } // I add it if the input would be "rwx" like this.
+                my_criteria->permissions = optarg; break;
             case 'l':my_criteria->nlinks = atoi(optarg); break;
-            case '?': printf("Invalid criteria."); break;
+            case '?': fprintf(stderr, "Invalid criteria.\n"); break;
         }
     }
 }
@@ -68,20 +72,17 @@ int match_filename(struct criteria* my_criteria, const char* filename) {
     char *pattern = my_criteria->filename;
     const char *string = filename;
 
-    while(*pattern != '\0') {
-        if(*(pattern+1) == '+') {
-            if(tolower(*pattern) == tolower(*string)) {
+    while (*pattern != '\0') {
+        if (*(pattern + 1) == '+') {
+            if (tolower(*pattern) != tolower(*string)) return 0;
+            string++;
+            while (*string != '\0' && tolower(*pattern) == tolower(*string))
                 string++;
-            } else {
-                pattern = pattern + 2;
-            }
+            pattern += 2; 
         } else {
-            if(tolower(*pattern) == tolower(*string)) {
-                string++;
-                pattern++;
-            } else {
-                return 0;
-            }
+            if (tolower(*pattern) != tolower(*string)) return 0;
+            pattern++;
+            string++;
         }
     }
     return (*string == '\0') ? 1 : 0;
@@ -181,9 +182,17 @@ void search(const char *path, struct criteria* my_criteria, int depth, int *foun
         if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+        int len = snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+        if (len >= sizeof(full_path)) {
+            fprintf(stderr, "Path too long: %s/%s\n", path, entry->d_name);
+            continue;
+        } // I add it just in case
         struct stat file_stat;
-        lstat(full_path, &file_stat);
+
+        if (lstat(full_path, &file_stat) == -1) {
+            fprintf(stderr, "lstat failed: %s\n", full_path);
+            continue;
+        }
 
         if(check_criteria(&file_stat, my_criteria, entry->d_name)) {
             print_result(entry->d_name, depth);
@@ -193,7 +202,9 @@ void search(const char *path, struct criteria* my_criteria, int depth, int *foun
             search(full_path, my_criteria,depth+1, found);
         }
     }
-    closedir(dir);
+    if (closedir(dir) == -1) {
+        fprintf(stderr, "closedir failed: %s\n", path);
+    } // I add the system call checking just in case. 
 }
 
 int main(int arg_count, char* arg_list[]) {
