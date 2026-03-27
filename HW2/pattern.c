@@ -36,16 +36,42 @@ int match_pattern(const char *pattern, const char *filename)
     if (!pattern || !filename) { return 0; }
 
     if (match_rec(pattern, filename)) { return 1; }
-
     const char *dot_ptr = filename;
     while (*dot_ptr != '\0' && *dot_ptr != '.') { dot_ptr++; }
-    if (*dot_ptr == '.') {
-        char stem[256];
-        size_t stem_len = (size_t)(dot_ptr - filename);
-        if (stem_len >= sizeof(stem)) { stem_len = sizeof(stem) - 1; }
-        for (size_t i = 0; i < stem_len; i++) { stem[i] = filename[i]; }
-        stem[stem_len] = '\0';
-        if (match_rec(pattern, stem)) { return 1; }
+
+    char stem[256];
+    size_t stem_len = (size_t)(dot_ptr - filename);
+    if (stem_len >= sizeof(stem)) { stem_len = sizeof(stem) - 1; }
+    for (size_t i = 0; i < stem_len; i++) { stem[i] = filename[i]; }
+    stem[stem_len] = '\0';
+
+    if (match_rec(pattern, stem)) { return 1; }
+
+    size_t seg_start = 0;
+    while (seg_start < stem_len) {
+        while (seg_start < stem_len &&
+               !isalnum((unsigned char)stem[seg_start])) {
+            seg_start++;
+        }
+        if (seg_start >= stem_len) { break; }
+
+        size_t seg_end = seg_start;
+        while (seg_end < stem_len &&
+               isalnum((unsigned char)stem[seg_end])) {
+            seg_end++;
+        }
+
+        char segment[256];
+        size_t seg_len = seg_end - seg_start;
+        if (seg_len >= sizeof(segment)) { seg_len = sizeof(segment) - 1; }
+        for (size_t i = 0; i < seg_len; i++) {
+            segment[i] = stem[seg_start + i];
+        }
+        segment[seg_len] = '\0';
+
+        if (match_rec(pattern, segment)) { return 1; }
+
+        seg_start = seg_end;
     }
 
     return 0;

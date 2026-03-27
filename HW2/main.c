@@ -81,6 +81,11 @@ static void process_sigchld(WorkerResult *results, int *num_results)
         int   status    = g_reaped_statuses[j];
         int   exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 0;
 
+        /* Log SIGCHLD handling in main context (not inside signal handler). */
+        fprintf(stderr,
+                "[Parent] SIGCHLD received. Reaped child PID:%d (exit status: %d).\n",
+                (int)pid, exit_code);
+
         int known = 0;
         for (int i = 0; i < g_num_children; i++) {
             if (g_child_pids[i] == pid) { known = 1; break; }
@@ -374,10 +379,6 @@ int main(int argc, char *argv[])
             g_sigchld_received = 0;
             process_sigchld(worker_results, &num_results);
         }
-
-        /* sigsuspend atomically restores orig_mask (unblocking the signals)
-         * and sleeps.  Any pending signal is delivered immediately, so there
-         * is no window for a missed signal. */
         sigsuspend(&orig_mask);
     }
 
