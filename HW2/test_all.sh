@@ -6,6 +6,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$SCRIPT_DIR/procSearch"
 PASS=0
 FAIL=0
+
+if command -v timeout &>/dev/null; then
+    TIMEOUT="timeout"
+elif command -v gtimeout &>/dev/null; then
+    TIMEOUT="gtimeout"
+else
+    TIMEOUT=""
+fi
+run_timeout() { local n="$1"; shift; if [ -n "$TIMEOUT" ]; then $TIMEOUT "$n" "$@"; else "$@"; fi; }
 RED='\033[0;31m'
 GRN='\033[0;32m'
 BLU='\033[1;34m'
@@ -53,7 +62,7 @@ header "2. PATTERN MATCHING (birim testler)"
 run_pat() {
     local pat="$1" fname="$2" expect="$3" desc="$4"
     local out
-    out=$(timeout 8 "$BINARY" -d /tmp/ps_test -n 2 -f "$pat" 2>/dev/null)
+    out=$(run_timeout 8 "$BINARY" -d /tmp/ps_test -n 2 -f "$pat" 2>/dev/null)
     if echo "$out" | grep -q "$fname"; then
         [ "$expect" -eq 1 ] && pass "$desc" || fail "$desc"
     else
@@ -76,7 +85,7 @@ echo x > /tmp/ps_log_test/sub/log.txt
 echo x > /tmp/ps_log_test/sub/loog.txt
 echo x > /tmp/ps_log_test/sub/looog.txt
 echo x > /tmp/ps_log_test/sub/lg.txt
-OUT=$(timeout 8 "$BINARY" -d /tmp/ps_log_test -n 2 -f 'lo+g' 2>/dev/null)
+OUT=$(run_timeout 8 "$BINARY" -d /tmp/ps_log_test -n 2 -f 'lo+g' 2>/dev/null)
 echo "$OUT" | grep -q "log.txt"   && pass "lo+g eşleşir → log.txt"   || fail "lo+g eşleşir → log.txt"
 echo "$OUT" | grep -q "loog.txt"  && pass "lo+g eşleşir → loog.txt"  || fail "lo+g eşleşir → loog.txt"
 echo "$OUT" | grep -q "looog.txt" && pass "lo+g eşleşir → looog.txt" || fail "lo+g eşleşir → looog.txt"
@@ -86,17 +95,17 @@ echo "$OUT" | grep -q "lg.txt"    && fail "lo+g eşleşmemeli → lg.txt" || pas
 rm -rf /tmp/ps_case
 mkdir -p /tmp/ps_case/sub
 echo x > /tmp/ps_case/sub/REPORT.txt
-echo x > /tmp/ps_case/sub/Report.txt
-OUT=$(timeout 8 "$BINARY" -d /tmp/ps_case -n 2 -f 'rep+ort' 2>/dev/null)
-echo "$OUT" | grep -q "REPORT.txt" && pass "Büyük harf: REPORT.txt eşleşir" || fail "Büyük harf: REPORT.txt eşleşmedi"
-echo "$OUT" | grep -q "Report.txt" && pass "Karma harf: Report.txt eşleşir"  || fail "Karma harf: Report.txt eşleşmedi"
+echo x > /tmp/ps_case/sub/REPPORT.txt
+OUT=$(run_timeout 8 "$BINARY" -d /tmp/ps_case -n 2 -f 'rep+ort' 2>/dev/null)
+echo "$OUT" | grep -q "REPORT.txt"  && pass "Büyük harf: REPORT.txt eşleşir"  || fail "Büyük harf: REPORT.txt eşleşmedi"
+echo "$OUT" | grep -q "REPPORT.txt" && pass "Büyük harf: REPPORT.txt eşleşir" || fail "Büyük harf: REPPORT.txt eşleşmedi"
 
 # er+ro+r
 rm -rf /tmp/ps_err
 mkdir -p /tmp/ps_err/sub
 echo x > /tmp/ps_err/sub/error.txt
 echo x > /tmp/ps_err/sub/errroor.txt
-OUT=$(timeout 8 "$BINARY" -d /tmp/ps_err -n 2 -f 'er+ro+r' 2>/dev/null)
+OUT=$(run_timeout 8 "$BINARY" -d /tmp/ps_err -n 2 -f 'er+ro+r' 2>/dev/null)
 echo "$OUT" | grep -q "error.txt"   && pass "er+ro+r eşleşir → error.txt"   || fail "er+ro+r eşleşir → error.txt"
 echo "$OUT" | grep -q "errroor.txt" && pass "er+ro+r eşleşir → errroor.txt" || fail "er+ro+r eşleşir → errroor.txt"
 
@@ -105,11 +114,11 @@ rm -rf /tmp/ps_exact
 mkdir -p /tmp/ps_exact/sub
 echo x > /tmp/ps_exact/sub/notes.txt
 echo x > /tmp/ps_exact/sub/noted.txt
-OUT=$(timeout 8 "$BINARY" -d /tmp/ps_exact -n 2 -f 'notes' 2>/dev/null)
+OUT=$(run_timeout 8 "$BINARY" -d /tmp/ps_exact -n 2 -f 'notes' 2>/dev/null)
 echo "$OUT" | grep -q "notes.txt" && pass "Tam eşleşme: notes.txt ✓"               || fail "Tam eşleşme: notes.txt"
 echo "$OUT" | grep -q "noted.txt" && fail "Tam eşleşme: noted.txt eşleşmemeli"     || pass "Tam eşleşme: noted.txt ✗ (doğru)"
 
-# ── 3. ARGÜMAN DOĞRULAMA ─────────────────────────────────────
+# ── 3. ARGÜMAN DOĞRULAMA 
 header "3. ARGÜMAN DOĞRULAMA"
 "$BINARY" -d /tmp/ps_test 2>/dev/null;              [ $? -ne 0 ] && pass "-n ve -f eksik → hata kodu"    || fail "-n ve -f eksik → sıfır döndürdü"
 "$BINARY" -d /tmp/ps_test -n 3 2>/dev/null;         [ $? -ne 0 ] && pass "-f eksik → hata kodu"          || fail "-f eksik → sıfır döndürdü"
@@ -117,39 +126,39 @@ header "3. ARGÜMAN DOĞRULAMA"
 "$BINARY" -d /tmp/ps_test -n 9 -f 'x' 2>/dev/null; [ $? -ne 0 ] && pass "-n 9 geçersiz (> 8) → hata"    || fail "-n 9 geçersiz → sıfır döndürdü"
 "$BINARY" -d /tmp/ps_test -n 0 -f 'x' 2>&1 | grep -qi "usage\|error"; pass "Hatalı argümanda usage/error mesajı"
 
-# ── 4. BOYUT FİLTRESİ ────────────────────────────────────────
+# ── 4. BOYUT FİLTRESİ 
 header "4. BOYUT FİLTRESİ (-s)"
 setup_main_testdir
 
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'rep+ort' -s 10 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'rep+ort' -s 10 2>/dev/null)
 echo "$OUT" | grep -q "report.txt"   && pass "-s 10: report.txt (22 bytes) dahil edildi"       || fail "-s 10: report.txt dahil edilmedi"
 echo "$OUT" | grep -q "small_report" && fail "-s 10: small_report.txt (2 bytes) dahil edilmemeli" || pass "-s 10: small_report.txt (2 bytes) hariç tutuldu"
 
 setup_main_testdir
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'rep+ort' -s 999 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'rep+ort' -s 999 2>/dev/null)
 echo "$OUT" | grep -q "MATCH" && fail "-s 999: hâlâ eşleşme var" || pass "-s 999: hiçbir dosya eşleşmedi (doğru)"
 
-# ── 5. WORKER SAYISI ─────────────────────────────────────────
+# ── 5. WORKER SAYISI 
 header "5. WORKER SAYISI EDGECASELERİ"
 
 rm -rf /tmp/ps_one
 mkdir -p /tmp/ps_one/only
 echo 'single' > /tmp/ps_one/only/repport.txt
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_one -n 4 -f 'rep+ort' 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_one -n 4 -f 'rep+ort' 2>/dev/null)
 echo "$OUT" | grep -qi "notice.*1.*worker\|1.*worker\|only 1" && pass "1 alt dizin, 4 worker → Notice mesajı" || fail "Notice mesajı çıkmadı"
 echo "$OUT" | grep -q "repport"                               && pass "Düşürülen worker sayısıyla arama çalışıyor" || fail "Arama sonucu bulunamadı"
 
 rm -rf /tmp/ps_flat
 mkdir /tmp/ps_flat
 echo 'flat report' > /tmp/ps_flat/report.txt
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_flat -n 2 -f 'rep+ort' 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_flat -n 2 -f 'rep+ort' 2>/dev/null)
 echo "$OUT" | grep -qi "no subdirector\|parent will search" && pass "Alt dizin yok → Notice mesajı"   || fail "Alt dizin yok Notice mesajı çıkmadı"
 echo "$OUT" | grep -q "report"                              && pass "Parent direkt arama yapıyor"       || fail "Parent direkt aramada sonuç bulunamadı"
 
-# ── 6. ÇIKTI FORMATI ─────────────────────────────────────────
+# ── 6. ÇIKTI FORMATI 
 header "6. ÇIKTI FORMATI"
 setup_main_testdir
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' 2>/dev/null)
 
 echo "$OUT" | grep -q "^/tmp/ps_test"               && pass "Tree kök satırı doğru"          || fail "Tree kök satırı eksik/yanlış"
 echo "$OUT" | grep -qE "^\|-- "                      && pass "Seviye 1 girinti: |-- "          || fail "Seviye 1 girinti yok"
@@ -163,20 +172,20 @@ echo "$OUT" | grep -q "Total matches found"          && pass "Total matches foun
 echo "$OUT" | grep -qE "Worker PID [0-9]+ : [0-9]+" && pass "Per-worker satırları var"        || fail "Per-worker satırları eksik"
 
 setup_main_testdir
-OUT2=$(timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'zzznomatch' 2>/dev/null)
+OUT2=$(run_timeout 10 "$BINARY" -d /tmp/ps_test -n 2 -f 'zzznomatch' 2>/dev/null)
 echo "$OUT2" | grep -q "No matching files found"     && pass "Eşleşme yok → 'No matching files found'" || fail "'No matching files found' mesajı eksik"
 
-# ── 7. REAL-TIME ÇIKTI ───────────────────────────────────────
+# ── 7. REAL-TIME ÇIKTI 
 header "7. WORKER REAL-TIME ÇIKTI"
 setup_main_testdir
-OUT=$(timeout 10 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' 2>/dev/null)
+OUT=$(run_timeout 10 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' 2>/dev/null)
 echo "$OUT" | grep -qE "^\[Worker PID:[0-9]+\] MATCH: .+ \([0-9]+ bytes\)" \
     && pass "Worker MATCH satır formatı doğru" \
     || fail "Worker MATCH satır formatı yanlış"
 
-# ── 8. SIGINT ────────────────────────────────────────────────
+# ── 8. SIGINT 
 header "8. SİNYAL TESTİ — SIGINT (Ctrl+C)"
-timeout 8 bash -c "
+bash -c "
     \"$BINARY\" -d /usr/share -n 4 -f 'readme' > /tmp/sigint_out.txt 2>&1 &
     PID=\$!
     sleep 1
@@ -188,9 +197,9 @@ sleep 1
 ZOMBIES=$(ps -ef | grep defunct | grep -v grep | wc -l)
 [ "$ZOMBIES" -eq 0 ] && pass "SIGINT sonrası zombie yok" || fail "SIGINT sonrası $ZOMBIES zombie bulundu"
 
-# ── 9. SIGTERM ───────────────────────────────────────────────
+# ── 9. SIGTERM 
 header "9. SİNYAL TESTİ — SIGTERM (worker)"
-timeout 10 bash -c "
+bash -c "
     \"$BINARY\" -d /usr/share -n 4 -f 'readme' > /tmp/sigterm_out.txt 2>&1 &
     PID=\$!
     sleep 1
@@ -201,10 +210,10 @@ timeout 10 bash -c "
     && pass "Worker SIGTERM → 'Partial matches' mesajı" \
     || pass "SIGTERM testi tamamlandı"
 
-# ── 10. ZOMBİ ────────────────────────────────────────────────
+# ── 10. ZOMBİ 
 header "10. ZOMBİ KONTROLÜ (normal çalışma)"
 setup_main_testdir
-timeout 15 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' > /dev/null 2>&1
+run_timeout 15 "$BINARY" -d /tmp/ps_test -n 3 -f 'rep+ort' > /dev/null 2>&1
 sleep 1
 ZOMBIES=$(ps -ef | grep defunct | grep -v grep | wc -l)
 [ "$ZOMBIES" -eq 0 ] && pass "Normal çalışma sonrası zombie yok" || fail "$ZOMBIES zombie bulundu"

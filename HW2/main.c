@@ -18,17 +18,11 @@
 #include "worker.h"
 #include "output.h"
 
-/* ------------------------------------------------------------------ */
-/* Constants                                                           */
-/* ------------------------------------------------------------------ */
 #define MAX_WORKERS  8
 #define MIN_WORKERS  2
 #define MAX_SUBDIRS  512
 #define MAX_MATCHES  4096
 
-/* ------------------------------------------------------------------ */
-/* Global signal state — only async-signal-safe types                 */
-/* ------------------------------------------------------------------ */
 static volatile sig_atomic_t g_sigusr1_count   = 0;
 static volatile sig_atomic_t g_sigint_received  = 0;
 static volatile sig_atomic_t g_sigchld_received = 0;
@@ -37,12 +31,28 @@ static pid_t g_child_pids[MAX_WORKERS];
 static int   g_num_children = 0;
 static int   g_num_workers  = 0;
 
-/* ------------------------------------------------------------------ */
-/* Signal handlers — no printf, no malloc, async-signal-safe only     */
-/* ------------------------------------------------------------------ */
+static pid_t                 g_reaped_pids    [MAX_WORKERS];
+static int                   g_reaped_statuses[MAX_WORKERS];
+static volatile sig_atomic_t g_num_reaped     = 0;
+static int                   g_sigchld_processed = 0;
+
 static void handler_sigusr1(int sig) { (void)sig; g_sigusr1_count++;    }
 static void handler_sigint (int sig) { (void)sig; g_sigint_received = 1; }
-static void handler_sigchld(int sig) { (void)sig; g_sigchld_received = 1;}
+static void handler_sigchld(int sig)
+{
+    (void)sig;
+    int   status;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        sig_atomic_t num_already_reaped = g_num_reaped;
+        if (num_already_reaped < MAX_WORKERS) {
+            g_reaped_pids    [num_already_reaped] = pid;
+            g_reaped_statuses[num_already_reaped] = status;
+            g_num_reaped                          = num_already_reaped + 1;
+        }
+    }
+    g_sigchld_received = 1;
+}
 
 static void install_signals(void)
 {
@@ -55,7 +65,7 @@ static void install_signals(void)
     sigaction(SIGUSR1, &sa, NULL);
 
     sa.sa_handler = handler_sigint;
-    sa.sa_flags   = 0;  /* do NOT restart — so pause() wakes up */
+    sa.sa_flags   = 0;
     sigaction(SIGINT, &sa, NULL);
 
     sa.sa_handler = handler_sigchld;
@@ -63,36 +73,22 @@ static void install_signals(void)
     sigaction(SIGCHLD, &sa, NULL);
 }
 
-/* ------------------------------------------------------------------ */
-/* SIGCHLD processing — called from main loop, NOT from handler       */
-/* ------------------------------------------------------------------ */
 static void process_sigchld(WorkerResult *results, int *num_results)
 {
-    int status;
-    pid_t pid;
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 0;
+    int n = (int)g_num_reaped;
+    for (int j = g_sigchld_processed; j < n; j++) {
+        pid_t pid       = g_reaped_pids[j];
+        int   status    = g_reaped_statuses[j];
+        int   exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 0;
 
         int known = 0;
-        for (int i = 0; i < g_num_children; i++)
+        for (int i = 0; i < g_num_children; i++) {
             if (g_child_pids[i] == pid) { known = 1; break; }
+        }
 
         if (known) {
-            /*
-             * A worker is "unexpected" only if we haven't yet received all
-             * SIGUSR1s — meaning it likely died without finishing normally.
-             * Workers that complete normally send SIGUSR1 first, so by the
-             * time SIGCHLD arrives for them g_sigusr1_count may already be
-             * at g_num_workers. We log only if the count is still short AND
-             * the worker did not exit cleanly (non-zero status or signalled).
-             */
-            int clean_exit = WIFEXITED(status) && (exit_code == WEXITSTATUS(status));
-            int all_done   = (g_sigusr1_count >= (sig_atomic_t)g_num_workers);
-            if (!all_done && !clean_exit) {
-                fprintf(stderr,
-                    "[Parent] Worker PID:%d terminated unexpectedly (exit status: %d).\n",
-                    (int)pid, exit_code);
-            } else if (!all_done && WIFSIGNALED(status)) {
+            int all_done = (g_sigusr1_count >= (sig_atomic_t)g_num_workers);
+            if (!all_done && (!WIFEXITED(status) || WIFSIGNALED(status))) {
                 fprintf(stderr,
                     "[Parent] Worker PID:%d terminated unexpectedly (exit status: %d).\n",
                     (int)pid, exit_code);
@@ -104,84 +100,81 @@ static void process_sigchld(WorkerResult *results, int *num_results)
             }
         }
     }
+    g_sigchld_processed = n;
 }
 
-/* ------------------------------------------------------------------ */
-/* Terminate all workers: SIGTERM → 3 s → SIGKILL                    */
-/* ------------------------------------------------------------------ */
 static void terminate_all_workers(void)
 {
-    for (int i = 0; i < g_num_children; i++)
+    for (int i = 0; i < g_num_children; i++) {
         kill(g_child_pids[i], SIGTERM);
+    }
 
     time_t deadline = time(NULL) + 3;
     while (time(NULL) < deadline) {
         int all_gone = 1;
-        for (int i = 0; i < g_num_children; i++)
-            if (waitpid(g_child_pids[i], NULL, WNOHANG) == 0) all_gone = 0;
-        if (all_gone) return;
+        for (int i = 0; i < g_num_children; i++) {
+            if (waitpid(g_child_pids[i], NULL, WNOHANG) == 0) { all_gone = 0; }
+        }
+        if (all_gone) { return; }
         struct timespec ts = {0, 100000000L};
         nanosleep(&ts, NULL);
     }
-    for (int i = 0; i < g_num_children; i++)
+    for (int i = 0; i < g_num_children; i++) {
         kill(g_child_pids[i], SIGKILL);
+    }
     int st;
-    while (waitpid(-1, &st, WNOHANG) > 0)
+    while (waitpid(-1, &st, WNOHANG) > 0) {
         ;
+    }
 }
 
-/* ------------------------------------------------------------------ */
-/* Directory / file helpers                                            */
-/* ------------------------------------------------------------------ */
 static int count_total_files(const char *path)
 {
-    DIR *dp = opendir(path);
-    if (!dp) return 0;
+    DIR *dir_stream = opendir(path);
+    if (!dir_stream) { return 0; }
     int count = 0;
-    struct dirent *e;
-    while ((e = readdir(dp)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        char fp[4096];
-        snprintf(fp, sizeof(fp), "%s/%s", path, e->d_name);
-        struct stat st;
-        if (lstat(fp, &st) < 0) continue;
-        if (S_ISDIR(st.st_mode)) count += count_total_files(fp);
-        else if (S_ISREG(st.st_mode)) count++;
+    struct dirent *dir_entry;
+    while ((dir_entry = readdir(dir_stream)) != NULL) {
+        if (!strcmp(dir_entry->d_name, ".") || !strcmp(dir_entry->d_name, "..")) { continue; }
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_entry->d_name);
+        struct stat file_stat;
+        if (lstat(fullpath, &file_stat) < 0) { continue; }
+        if (S_ISDIR(file_stat.st_mode)) { count += count_total_files(fullpath); }
+        else if (S_ISREG(file_stat.st_mode)) { count++; }
     }
-    closedir(dp);
+    closedir(dir_stream);
     return count;
 }
 
-/* Used in no-fork (parent-only) mode */
 static void collect_matches(const char *path, const char *pattern, long min_size,
-                             MatchEntry *entries, int *n, pid_t pid)
+                             MatchEntry *entries, int *num_matches, pid_t pid)
 {
-    DIR *dp = opendir(path);
-    if (!dp) return;
-    struct dirent *e;
-    while ((e = readdir(dp)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        char fp[4096];
-        snprintf(fp, sizeof(fp), "%s/%s", path, e->d_name);
-        struct stat st;
-        if (lstat(fp, &st) < 0) continue;
-        if (S_ISDIR(st.st_mode)) {
-            collect_matches(fp, pattern, min_size, entries, n, pid);
-        } else if (S_ISREG(st.st_mode)) {
-            if (min_size >= 0 && st.st_size < (off_t)min_size) continue;
-            if (match_pattern(pattern, e->d_name) && *n < MAX_MATCHES) {
-                strncpy(entries[*n].path, fp, 4095);
-                entries[*n].path[4095] = '\0';
-                entries[*n].size       = (long)st.st_size;
-                entries[*n].worker_pid = pid;
-                (*n)++;
+    DIR *dir_stream = opendir(path);
+    if (!dir_stream) { return; }
+    struct dirent *dir_entry;
+    while ((dir_entry = readdir(dir_stream)) != NULL) {
+        if (!strcmp(dir_entry->d_name, ".") || !strcmp(dir_entry->d_name, "..")) { continue; }
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_entry->d_name);
+        struct stat file_stat;
+        if (lstat(fullpath, &file_stat) < 0) { continue; }
+        if (S_ISDIR(file_stat.st_mode)) {
+            collect_matches(fullpath, pattern, min_size, entries, num_matches, pid);
+        } else if (S_ISREG(file_stat.st_mode)) {
+            if (min_size >= 0 && file_stat.st_size < (off_t)min_size) { continue; }
+            if (match_pattern(pattern, dir_entry->d_name) && *num_matches < MAX_MATCHES) {
+                strncpy(entries[*num_matches].path, fullpath, 4095);
+                entries[*num_matches].path[4095] = '\0';
+                entries[*num_matches].size       = (long)file_stat.st_size;
+                entries[*num_matches].worker_pid = pid;
+                (*num_matches)++;
             }
         }
     }
-    closedir(dp);
+    closedir(dir_stream);
 }
 
-/* Parse "[Worker PID:NNN] MATCH: /path/file (NNN bytes)" */
 static int parse_match_line(const char *line, MatchEntry *out)
 {
     int  pid;
@@ -198,24 +191,18 @@ static int parse_match_line(const char *line, MatchEntry *out)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Temp-file management (workers write results here for parent)       */
-/* ------------------------------------------------------------------ */
 static char g_tmpfiles[MAX_WORKERS][64];
 static int  g_num_tmpfiles = 0;
-static int  g_is_parent    = 0;  /* only parent cleans up temp files */
+static int  g_is_parent    = 0;
 
 static void cleanup_tmpfiles(void)
 {
-    /* Children inherit atexit — they must NOT delete files parent still needs */
-    if (!g_is_parent) return;
-    for (int i = 0; i < g_num_tmpfiles; i++)
+    if (!g_is_parent) { return; }
+    for (int i = 0; i < g_num_tmpfiles; i++) {
         unlink(g_tmpfiles[i]);
+    }
 }
 
-/* ------------------------------------------------------------------ */
-/* Usage                                                               */
-/* ------------------------------------------------------------------ */
 static void print_usage(const char *prog)
 {
     fprintf(stderr,
@@ -227,9 +214,6 @@ static void print_usage(const char *prog)
         prog, MIN_WORKERS, MAX_WORKERS);
 }
 
-/* ------------------------------------------------------------------ */
-/* main                                                                */
-/* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
     char *root_dir    = NULL;
@@ -267,35 +251,32 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* ---- Collect immediate subdirectories of root ---- */
     char *subdirs[MAX_SUBDIRS];
     int   num_subdirs = 0;
     {
-        DIR *dp = opendir(root_dir);
-        if (!dp) { perror("opendir"); return 1; }
-        struct dirent *e;
-        while ((e = readdir(dp)) != NULL && num_subdirs < MAX_SUBDIRS) {
-            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-            char fp[4096];
-            snprintf(fp, sizeof(fp), "%s/%s", root_dir, e->d_name);
-            struct stat st;
-            if (lstat(fp, &st) < 0) continue;
-            if (S_ISDIR(st.st_mode)) {
-                subdirs[num_subdirs] = strdup(fp);
-                if (!subdirs[num_subdirs]) { perror("strdup"); closedir(dp); return 1; }
+        DIR *dir_stream = opendir(root_dir);
+        if (!dir_stream) { perror("opendir"); return 1; }
+        struct dirent *dir_entry;
+        while ((dir_entry = readdir(dir_stream)) != NULL && num_subdirs < MAX_SUBDIRS) {
+            if (!strcmp(dir_entry->d_name, ".") || !strcmp(dir_entry->d_name, "..")) { continue; }
+            char fullpath[4096];
+            snprintf(fullpath, sizeof(fullpath), "%s/%s", root_dir, dir_entry->d_name);
+            struct stat file_stat;
+            if (lstat(fullpath, &file_stat) < 0) { continue; }
+            if (S_ISDIR(file_stat.st_mode)) {
+                subdirs[num_subdirs] = strdup(fullpath);
+                if (!subdirs[num_subdirs]) { perror("strdup"); closedir(dir_stream); return 1; }
                 num_subdirs++;
             }
         }
-        closedir(dp);
+        closedir(dir_stream);
     }
 
-    /* ---- Static arrays to avoid stack overflow ---- */
     static MatchEntry match_entries[MAX_MATCHES];
     int num_entries = 0;
     WorkerResult worker_results[MAX_WORKERS];
     int num_results = 0;
 
-    /* ---- No subdirectories: parent searches root directly ---- */
     if (num_subdirs == 0) {
         printf("Notice: no subdirectories found; parent will search root directly.\n");
         collect_matches(root_dir, pattern, min_size,
@@ -309,7 +290,6 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    /* ---- Reduce worker count if fewer subdirs than requested ---- */
     if (num_subdirs < num_workers) {
         printf("Notice: only %d subdirector%s found; using %d worker%s instead of %d.\n",
                num_subdirs, num_subdirs == 1 ? "y" : "ies",
@@ -319,7 +299,6 @@ int main(int argc, char *argv[])
     }
     g_num_workers = num_workers;
 
-    /* ---- Round-robin directory partitioning ---- */
     char *wdirs[MAX_WORKERS][MAX_SUBDIRS + 1];
     int   wdir_count[MAX_WORKERS];
     memset(wdir_count, 0, sizeof(wdir_count));
@@ -327,15 +306,10 @@ int main(int argc, char *argv[])
         int w = i % num_workers;
         wdirs[w][wdir_count[w]++] = subdirs[i];
     }
-    for (int w = 0; w < num_workers; w++)
+    for (int w = 0; w < num_workers; w++) {
         wdirs[w][wdir_count[w]] = NULL;
+    }
 
-    /* ---- Create per-worker temp files ---- */
-    /*
-     * Each worker writes its MATCH lines here. Parent reads them after
-     * all workers finish to build the tree. This avoids races and is
-     * simpler than pipes for multi-signal coordination.
-     */
     for (int w = 0; w < num_workers; w++) {
         snprintf(g_tmpfiles[w], sizeof(g_tmpfiles[w]),
                  "/tmp/procsearch_%d_XXXXXX", (int)getpid());
@@ -346,22 +320,18 @@ int main(int argc, char *argv[])
     }
     atexit(cleanup_tmpfiles);
 
-    /* ---- Install parent signal handlers BEFORE forking ---- */
     install_signals();
 
     pid_t parent_pid = getpid();
 
-    /* Flush stdio buffers before fork — children must not repeat parent output */
     fflush(stdout);
     fflush(stderr);
 
-    /* ---- Fork workers ---- */
     for (int w = 0; w < num_workers; w++) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); return 1; }
 
         if (pid == 0) {
-            /* ===== CHILD ===== */
             WorkerArgs args;
             args.parent_pid  = parent_pid;
             args.dirs        = wdirs[w];
@@ -370,81 +340,98 @@ int main(int argc, char *argv[])
             args.min_size    = min_size;
             args.result_file = g_tmpfiles[w];
             run_worker(&args);
-            /* never returns */
         }
 
         g_child_pids[g_num_children++] = pid;
     }
 
-    /* Mark this process as the parent so atexit cleanup runs only here */
     g_is_parent = 1;
 
-    /* ---- Parent: wait for all workers to send SIGUSR1 ---- */
+    sigset_t mask_all, mask_waiting;
+    sigfillset(&mask_all);
+    sigemptyset(&mask_waiting);
+
     while (g_sigusr1_count < (sig_atomic_t)g_num_workers) {
 
-        /* SIGINT: Ctrl+C */
         if (g_sigint_received) {
             fprintf(stderr, "\n[Parent] SIGINT received. Terminating all workers...\n");
             terminate_all_workers();
             fprintf(stderr, "[Parent] Partial shutdown complete.\n");
             fprintf(stderr, "Matches found so far: %d\n", num_entries);
-            for (int i = 0; i < num_subdirs; i++) free(subdirs[i]);
+            for (int i = 0; i < num_subdirs; i++) { free(subdirs[i]); }
             return 1;
         }
 
-        /* SIGCHLD: unexpected child exit */
         if (g_sigchld_received) {
             g_sigchld_received = 0;
             process_sigchld(worker_results, &num_results);
-            /*
-             * If a worker died without sending SIGUSR1, we increment
-             * the counter so we don't wait forever.
-             */
         }
 
-        /* Sleep until next signal */
-        pause();
+        sigsuspend(&mask_waiting);
     }
 
-    /* ---- All workers done: collect exit statuses via waitpid ---- */
+    sigset_t block_chld, old_sigmask;
+    sigemptyset(&block_chld);
+    sigaddset(&block_chld, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &block_chld, &old_sigmask);
+
     num_results = 0;
+    for (int j = 0; j < (int)g_num_reaped; j++) {
+        pid_t pid       = g_reaped_pids[j];
+        int   exit_code = WIFEXITED(g_reaped_statuses[j]) ? WEXITSTATUS(g_reaped_statuses[j]) : 0;
+        for (int i = 0; i < g_num_children; i++) {
+            if (g_child_pids[i] == pid && num_results < MAX_WORKERS) {
+                worker_results[num_results].worker_pid  = pid;
+                worker_results[num_results].match_count = exit_code;
+                num_results++;
+                break;
+            }
+        }
+    }
     for (int i = 0; i < g_num_children; i++) {
-        int status;
-        pid_t ret = waitpid(g_child_pids[i], &status, 0);
-        if (ret > 0) {
-            worker_results[num_results].worker_pid  = g_child_pids[i];
-            worker_results[num_results].match_count =
-                WIFEXITED(status) ? WEXITSTATUS(status) : 0;
-            num_results++;
+        int already = 0;
+        for (int j = 0; j < num_results; j++) {
+            if (worker_results[j].worker_pid == g_child_pids[i]) { already = 1; break; }
+        }
+        if (!already) {
+            int status;
+            if (waitpid(g_child_pids[i], &status, 0) > 0 && num_results < MAX_WORKERS) {
+                worker_results[num_results].worker_pid  = g_child_pids[i];
+                worker_results[num_results].match_count =
+                    WIFEXITED(status) ? WEXITSTATUS(status) : 0;
+                num_results++;
+            }
         }
     }
 
-    /* ---- Read match lines from per-worker temp files ---- */
+    sigprocmask(SIG_SETMASK, &old_sigmask, NULL);
+
     for (int w = 0; w < num_workers; w++) {
         FILE *fp = fopen(g_tmpfiles[w], "r");
-        if (!fp) continue;
+        if (!fp) { continue; }
         char line[512];
         while (fgets(line, sizeof(line), fp)) {
             size_t ln = strlen(line);
-            if (ln > 0 && line[ln-1] == '\n') line[ln-1] = '\0';
+            if (ln > 0 && line[ln-1] == '\n') { line[ln-1] = '\0'; }
             MatchEntry me;
-            if (parse_match_line(line, &me) && num_entries < MAX_MATCHES)
+            if (parse_match_line(line, &me) && num_entries < MAX_MATCHES) {
                 match_entries[num_entries++] = me;
+            }
         }
         fclose(fp);
     }
 
-    /* ---- Final output ---- */
     int total_scanned = count_total_files(root_dir);
     int total_matches = 0;
-    for (int i = 0; i < num_results; i++)
+    for (int i = 0; i < num_results; i++) {
         total_matches += worker_results[i].match_count;
+    }
 
     printf("\n");
     print_tree(root_dir, match_entries, num_entries);
     print_summary(num_workers, total_scanned, total_matches,
                   worker_results, num_results);
 
-    for (int i = 0; i < num_subdirs; i++) free(subdirs[i]);
+    for (int i = 0; i < num_subdirs; i++) { free(subdirs[i]); }
     return 0;
 }

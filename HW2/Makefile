@@ -14,7 +14,6 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Header dependencies
 main.o:    main.c pattern.h worker.h output.h
 pattern.o: pattern.c pattern.h
 worker.o:  worker.c worker.h pattern.h

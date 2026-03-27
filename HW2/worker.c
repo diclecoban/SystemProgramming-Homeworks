@@ -27,41 +27,41 @@ static void search_dir(const char *path,
                        FILE       *result_fp,
                        int        *match_count)
 {
-    if (g_sigterm_received) return;
+    if (g_sigterm_received) { return; }
 
-    DIR *dp = opendir(path);
-    if (!dp) return;
+    DIR *dir_stream = opendir(path);
+    if (!dir_stream) { return; }
 
-    struct dirent *entry;
-    while ((entry = readdir(dp)) != NULL) {
-        if (g_sigterm_received) break;
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+    struct dirent *dir_entry;
+    while ((dir_entry = readdir(dir_stream)) != NULL) {
+        if (g_sigterm_received) { break; }
+        if (!strcmp(dir_entry->d_name, ".") || !strcmp(dir_entry->d_name, "..")) { continue; }
 
         char fullpath[4096];
-        int n = snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
-        if (n < 0 || n >= (int)sizeof(fullpath)) continue;
+        int path_len = snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_entry->d_name);
+        if (path_len < 0 || path_len >= (int)sizeof(fullpath)) { continue; }
 
-        struct stat st;
-        if (lstat(fullpath, &st) < 0) continue;
+        struct stat file_stat;
+        if (lstat(fullpath, &file_stat) < 0) { continue; }
 
-        if (S_ISDIR(st.st_mode)) {
+        if (S_ISDIR(file_stat.st_mode)) {
             search_dir(fullpath, pattern, min_size, result_fp, match_count);
-        } else if (S_ISREG(st.st_mode)) {
-            if (min_size >= 0 && st.st_size < (off_t)min_size) continue;
-            if (match_pattern(pattern, entry->d_name)) {
-                printf("[Worker PID:%d] MATCH: %s (%lld bytes)\n",
-                       (int)getpid(), fullpath, (long long)st.st_size);
+        } else if (S_ISREG(file_stat.st_mode)) {
+            if (min_size >= 0 && file_stat.st_size < (off_t)min_size) { continue; }
+            if (match_pattern(pattern, dir_entry->d_name)) {
+                printf("[Worker PID:%d] MATCH: %s (%ld bytes)\n",
+                       (int)getpid(), fullpath, (long)file_stat.st_size);
                 fflush(stdout);
                 if (result_fp) {
-                    fprintf(result_fp, "[Worker PID:%d] MATCH: %s (%lld bytes)\n",
-                            (int)getpid(), fullpath, (long long)st.st_size);
+                    fprintf(result_fp, "[Worker PID:%d] MATCH: %s (%ld bytes)\n",
+                            (int)getpid(), fullpath, (long)file_stat.st_size);
                     fflush(result_fp);
                 }
                 (*match_count)++;
             }
         }
     }
-    closedir(dp);
+    closedir(dir_stream);
 }
 
 void run_worker(const WorkerArgs *args)
@@ -74,16 +74,17 @@ void run_worker(const WorkerArgs *args)
     sigaction(SIGTERM, &sa, NULL);
 
     FILE *result_fp = NULL;
-    if (args->result_file)
+    if (args->result_file) {
         result_fp = fopen(args->result_file, "w");
+    }
 
     int match_count = 0;
     for (int i = 0; i < args->num_dirs; i++) {
-        if (g_sigterm_received) break;
+        if (g_sigterm_received) { break; }
         search_dir(args->dirs[i], args->pattern, args->min_size, result_fp, &match_count);
     }
 
-    if (result_fp) fclose(result_fp);
+    if (result_fp) { fclose(result_fp); }
 
     if (g_sigterm_received) {
         printf("[Worker PID:%d] SIGTERM received. Partial matches: %d. Exiting.\n",
