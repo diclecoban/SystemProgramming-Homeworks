@@ -87,8 +87,7 @@ static void process_sigchld(WorkerResult *results, int *num_results)
         }
 
         if (known) {
-            int all_done = (g_sigusr1_count >= (sig_atomic_t)g_num_workers);
-            if (!all_done && (!WIFEXITED(status) || WIFSIGNALED(status))) {
+            if (!WIFEXITED(status) || WIFSIGNALED(status)) {
                 fprintf(stderr,
                     "[Parent] Worker PID:%d terminated unexpectedly (exit status: %d).\n",
                     (int)pid, exit_code);
@@ -324,6 +323,16 @@ int main(int argc, char *argv[])
 
     pid_t parent_pid = getpid();
 
+    /* Block SIGUSR1, SIGCHLD, SIGINT before forking so no signal can slip
+     * through between the loop condition check and sigsuspend.  Workers
+     * inherit the blocked mask but reset it inside run_worker(). */
+    sigset_t block_set, orig_mask;
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGUSR1);
+    sigaddset(&block_set, SIGCHLD);
+    sigaddset(&block_set, SIGINT);
+    sigprocmask(SIG_BLOCK, &block_set, &orig_mask);
+
     fflush(stdout);
     fflush(stderr);
 
@@ -332,6 +341,8 @@ int main(int argc, char *argv[])
         if (pid < 0) { perror("fork"); return 1; }
 
         if (pid == 0) {
+            /* Child: restore original signal mask before running worker */
+            sigprocmask(SIG_SETMASK, &orig_mask, NULL);
             WorkerArgs args;
             args.parent_pid  = parent_pid;
             args.dirs        = wdirs[w];
@@ -347,11 +358,7 @@ int main(int argc, char *argv[])
 
     g_is_parent = 1;
 
-    sigset_t mask_all, mask_waiting;
-    sigfillset(&mask_all);
-    sigemptyset(&mask_waiting);
-
-    while (g_sigusr1_count < (sig_atomic_t)g_num_workers) {
+    while (g_num_reaped < (sig_atomic_t)g_num_workers) {
 
         if (g_sigint_received) {
             fprintf(stderr, "\n[Parent] SIGINT received. Terminating all workers...\n");
@@ -359,6 +366,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "[Parent] Partial shutdown complete.\n");
             fprintf(stderr, "Matches found so far: %d\n", num_entries);
             for (int i = 0; i < num_subdirs; i++) { free(subdirs[i]); }
+            sigprocmask(SIG_SETMASK, &orig_mask, NULL);
             return 1;
         }
 
@@ -367,8 +375,13 @@ int main(int argc, char *argv[])
             process_sigchld(worker_results, &num_results);
         }
 
-        sigsuspend(&mask_waiting);
+        /* sigsuspend atomically restores orig_mask (unblocking the signals)
+         * and sleeps.  Any pending signal is delivered immediately, so there
+         * is no window for a missed signal. */
+        sigsuspend(&orig_mask);
     }
+
+    sigprocmask(SIG_SETMASK, &orig_mask, NULL);
 
     sigset_t block_chld, old_sigmask;
     sigemptyset(&block_chld);
