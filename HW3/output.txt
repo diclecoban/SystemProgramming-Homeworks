@@ -1,0 +1,8 @@
+104 kernel 0
+108 mutex 0
+102 process 1
+105 thread 1
+103 system 2
+107 signal 2
+101 apple 3
+106 memory 3
