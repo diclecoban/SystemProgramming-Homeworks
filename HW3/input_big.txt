@@ -1,0 +1,15 @@
+101 apple 2
+102 process 0
+103 system 1
+104 kernel 5
+105 thread 3
+106 mutex 4
+107 semaphore 0
+108 deadlock 2
+109 concurrent 1
+110 scheduler 3
+111 pipeline 4
+112 interrupt 5
+113 buffer 0
+114 cache 1
+115 memory 2

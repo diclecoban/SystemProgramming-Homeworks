@@ -1,0 +1,7 @@
+201 queue 3
+202 pipe 1
+203 socket 0
+204 fork 2
+205 exec 1
+206 lock 3
+207 cache 0

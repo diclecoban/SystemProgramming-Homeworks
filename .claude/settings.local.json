@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Bash(rm -rf /tmp/crawltest)",
+      "Bash(mkdir -p /tmp/crawltest/alpha/sub1 /tmp/crawltest/beta /tmp/crawltest/gamma /tmp/crawltest/delta)",
+      "Bash(touch /tmp/crawltest/alpha/notes.md)",
+      "Bash(touch /tmp/crawltest/alpha/sub1/image.png)",
+      "Bash(touch /tmp/crawltest/beta/error_log.txt)",
+      "Bash(./procSearch -d /tmp/crawltest -n 3 -f 'rep+ort')",
+      "Bash(touch /tmp/crawltest/gamma/data.csv)",
+      "Bash(touch /tmp/crawltest/delta/summary.txt)",
+      "Read(//private/tmp/crawltest/**)",
+      "Bash(./procSearch -d /tmp/crawltest -n 3 -f 'rep+ort' -s 15)",
+      "Bash(./procSearch -d /tmp/crawltest -n 3 -f 'xyz+123')",
+      "Bash(./procSearch -d /tmp/crawltest -n 2 -f 'er+ro+r')",
+      "Bash(./procSearch -d /tmp/crawltest -n 2 -f 'lo+g')",
+      "Bash(echo \"=== TEST 6: subdirs < num_workers \\(5 worker, 4 subdir\\) ===\")",
+      "Bash(./procSearch -d /tmp/crawltest -n 5 -f 'rep+ort')",
+      "Bash(mkdir -p /tmp/flattest)",
+      "Bash(./procSearch -d /tmp/flattest -n 2 -f 'rep+ort')",
+      "Bash(chmod +x test_all.sh)",
+      "Bash(bash test_all.sh)",
+      "Bash(timeout 3 echo \"timeout çalışıyor\")",
+      "Bash(rm -rf /tmp/ps_case)",
+      "Bash(mkdir -p /tmp/ps_case/sub)",
+      "Read(//tmp/ps_case/**)",
+      "Bash(./procSearch -d /tmp/ps_case -n 2 -f 'rep+ort')",
+      "Bash(make clean:*)",
+      "Bash(pandoc --version)",
+      "Bash(python3 -c \"import reportlab\")",
+      "Bash(python3 -c \"import fpdf\")",
+      "Bash(python3 -m pip install fpdf2 -q)",
+      "Bash(python3 generate_qa_pdf.py)",
+      "Bash(python3 -c ':*)",
+      "Bash(brew install:*)",
+      "Bash(pdftotext /Users/diclesaracoban/Desktop/SystemProgramming/CSE344_HW3.pdf -)",
+      "Bash(timeout 15 ./hw3 -f 4 -w 2 -l 1 -s 2 -c 3 -d 3 -r 2 -i sample_input.txt -o output.txt)",
+      "Bash(echo \"EXIT: $?\")"
+    ]
+  }
+}
