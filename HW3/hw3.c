@@ -3,10 +3,11 @@
 /* ── Argument parsing ────────────────────────────────────────────────── */
 static void usage(const char *prog)
 {
-    fprintf(stderr,
-        "Usage: %s -f <floors> -w <word_carriers> -l <letter_carriers> "
-        "-s <sorters> -c <capacity> -d <delivery_cap> -r <reposition_cap> "
-        "-i <input> -o <output>\n", prog);
+    checked_fprintf(stderr,
+                    "Usage: %s -f <floors> -w <word_carriers> -l <letter_carriers> "
+                    "-s <sorters> -c <capacity> -d <delivery_cap> -r <reposition_cap> "
+                    "-i <input> -o <output>\n", prog);
+    checked_fflush(stderr, "fflush(stderr)");
 }
 
 static int parse_positive(const char *arg, const char *name)
@@ -30,8 +31,8 @@ void parse_args(int argc, char **argv, Config *cfg)
             case 'c': cfg->max_words_per_floor         = parse_positive(optarg, "max_words_per_floor"); break;
             case 'd': cfg->delivery_capacity           = parse_positive(optarg, "delivery_capacity"); break;
             case 'r': cfg->reposition_capacity         = parse_positive(optarg, "reposition_capacity"); break;
-            case 'i': strncpy(cfg->input_path,  optarg, PATH_MAX - 1); break;
-            case 'o': strncpy(cfg->output_path, optarg, PATH_MAX - 1); break;
+            case 'i': copy_string(cfg->input_path,  sizeof(cfg->input_path),  optarg, "input_path"); break;
+            case 'o': copy_string(cfg->output_path, sizeof(cfg->output_path), optarg, "output_path"); break;
             default:  usage(argv[0]); exit(EXIT_FAILURE);
         }
     }
@@ -53,7 +54,8 @@ static void signal_handler(int sig)
     g_stop = 1;
     if (g_state) {
         g_state->shutdown = 1;
-        if (g_state->parent_event) sem_post(g_state->parent_event);
+        if (g_state->parent_event && sem_post(g_state->parent_event) == -1)
+            g_stop = 1;
     }
 }
 
@@ -61,8 +63,9 @@ static void signal_handler(int sig)
 static void wake_all(SharedState *st)
 {
     unlock_sem(st->parent_event, "sem_post(parent_event)");
-    for (int i = 0; i < MAX_CARRIERS; ++i)
-        unlock_sem(st->carriers[i].event_sem, "sem_post(carrier_event)");
+    for (int i = 0; i < st->next_carrier_slot; ++i)
+        if (st->carriers[i].event_sem_name[0])
+            signal_carrier_event(&st->carriers[i]);
     for (int i = 0; i < 16; ++i) {
         unlock_sem(st->delivery_items,     "sem_post(delivery_items)");
         unlock_sem(st->reposition_items,   "sem_post(reposition_items)");
@@ -74,8 +77,14 @@ static void wake_all(SharedState *st)
 
 static void terminate_children(pid_t *children, int count)
 {
-    for (int i = 0; i < count; ++i) if (children[i] > 0) kill(children[i], SIGTERM);
-    for (int i = 0; i < count; ++i) if (children[i] > 0) waitpid(children[i], NULL, 0);
+    for (int i = 0; i < count; ++i) {
+        if (children[i] > 0 && kill(children[i], SIGTERM) == -1 && errno != ESRCH)
+            fail("kill(%d): %s", (int)children[i], strerror(errno));
+    }
+    for (int i = 0; i < count; ++i) {
+        if (children[i] > 0 && waitpid(children[i], NULL, 0) == -1 && errno != ECHILD)
+            fail("waitpid(%d): %s", (int)children[i], strerror(errno));
+    }
 }
 
 /* ── main ────────────────────────────────────────────────────────────── */
@@ -91,21 +100,24 @@ int main(int argc, char **argv)
     load_input(st);
 
     struct sigaction sa; memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler; sigemptyset(&sa.sa_mask);
+    sa.sa_handler = signal_handler;
+    check_err(sigemptyset(&sa.sa_mask), "sigemptyset");
     check_err(sigaction(SIGINT,  &sa, NULL), "sigaction(SIGINT)");
     check_err(sigaction(SIGTERM, &sa, NULL), "sigaction(SIGTERM)");
 
-    printf("Program is starting...\n");
-    printf("Input file is being read...\n");
-    printf("Shared memory is initialized...\n");
-    printf("Synchronization primitives are created...\n");
-    printf("Processes are being created...\n");
-    printf("[PID:%d] Parent process started\n", (int)getpid());
+    checked_printf("Program is starting...\n");
+    checked_printf("Input file is being read...\n");
+    checked_printf("Shared memory is initialized...\n");
+    checked_printf("Synchronization primitives are created...\n");
+    checked_printf("Processes are being created...\n");
+    checked_printf("[PID:%d] Parent process started\n", (int)getpid());
+    checked_fflush(stdout, "fflush(stdout)");
 
     pid_t children[MAX_CHILDREN]; int child_count = 0;
 
     for (int f = 0; f < cfg.num_floors; ++f) {
-        printf("--- Initializing Floor %d ---\n", f); fflush(stdout);
+        checked_printf("--- Initializing Floor %d ---\n", f);
+        checked_fflush(stdout, "fflush(stdout)");
 
         for (int i = 0; i < cfg.word_carriers_per_floor; ++i) {
             int slot = reserve_wcarrier_slot(st, f);
@@ -148,17 +160,19 @@ int main(int argc, char **argv)
     wake_all(st);
 
     if (st->completed_words == st->total_words && !g_stop) {
-        printf("All words have been transported and sorted...\n");
-        printf("Output file is being created...\n");
+        checked_printf("All words have been transported and sorted...\n");
+        checked_printf("Output file is being created...\n");
         write_output(st);
         print_summary(st);
-        printf("Program terminated successfully.\n");
+        checked_printf("Program terminated successfully.\n");
+        checked_fflush(stdout, "fflush(stdout)");
     } else {
-        fprintf(stderr, "Program interrupted before normal completion.\n");
+        checked_fprintf(stderr, "Program interrupted before normal completion.\n");
+        checked_fflush(stderr, "fflush(stderr)");
     }
 
     terminate_children(children, child_count);
-    munmap(st, sizeof(*st));
+    check_err(munmap(st, sizeof(*st)), "munmap");
     cleanup_named_sems();
     return 0;
 }

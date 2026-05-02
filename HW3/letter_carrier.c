@@ -71,7 +71,7 @@ void letter_carrier_loop(SharedState *st, int initial_floor, int slot)
             safe_log("[PID:%d] Letter-carrier-process_%d requested reposition elevator from floor %d\n",
                      (int)getpid(), slot, floor);
             enqueue_reposition(st, slot, floor, tf);
-            wait_event(carrier->event_sem, -1);
+            wait_carrier_event(carrier, -1);
             continue;
         }
 
@@ -93,7 +93,7 @@ void letter_carrier_loop(SharedState *st, int initial_floor, int slot)
         safe_log("[PID:%d] Letter-carrier-process_%d requested delivery elevator from floor %d to floor %d\n",
                  (int)getpid(), slot, floor, dest);
         enqueue_delivery(st, slot, floor, dest, fw, fc, ch);
-        wait_event(carrier->event_sem, -1);
+        wait_carrier_event(carrier, -1);
     }
     _exit(0);
 }

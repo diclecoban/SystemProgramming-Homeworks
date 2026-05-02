@@ -1,5 +1,0 @@
-101 apple 2
-102 process 0
-103 system 1
-104 kernel 2
-105 thread 0

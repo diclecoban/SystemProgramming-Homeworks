@@ -1,0 +1,68 @@
+Kolay
+
+Soru: Sistemin genel amacı ne? 
+Cevap: Input’taki kelimeleri çoklu process mimarisiyle sisteme alıp, harflerini ilgili sorting floor’a taşıyıp eşzamanlı olarak doğru konumlarına yerleştiriyorum.
+Soru: Kaç ana process tipi var? 
+Cevap: Parent/coordinator, word-carrier, letter-carrier, sorting process, delivery elevator ve reposition elevator olmak üzere altı ana rol var.
+Soru: Parent process ne yapıyor? 
+Cevap: Shared memory ve semaphore’ları kuruyor, input’u yüklüyor, tüm child process’leri fork ediyor, gerektiğinde yeni carrier spawn ediyor, bitişi izliyor ve output’u üretiyor.
+Soru: Word-carrier ne yapıyor? 
+Cevap: Round-robin ile henüz alınmamış bir kelimeyi claim ediyor ve kapasite uygunsa kelimeyi arrival floor ile sorting floor için sisteme admitted hale getiriyor.
+Soru: Letter-carrier ne yapıyor? 
+Cevap: Arrival floor’daki admitted kelimelerden taşınmamış bir karakter seçiyor; hedef floor aynıysa direkt bırakıyor, farklıysa delivery elevator kuyruğuna istek atıyor.
+Soru: Sorting process ne yapıyor? 
+Cevap: Sorting area’daki karakterleri sorting_meta bilgisine göre doğru pozisyona taşıyor, swap ediyor veya fix ediyor; tüm pozisyonlar fixed olunca kelime tamamlanıyor.
+
+Orta
+
+Soru: Round-robin seçimi nasıl çalışıyor? 
+Cevap: Global rr_cursor tutuluyor; word-carrier’lar bu cursor’dan başlayarak sıradaki uygun kelimeyi tarıyor ve claim ettikten sonra cursor bir sonraki elemana ilerliyor.
+Soru: Word admission policy neden var? 
+Cevap: Floor capacity aşılmasın diye admission all-or-nothing yapılıyor; arrival ve sorting floor’da yer yoksa kelime admitted olmuyor ve daha sonra tekrar deneniyor.
+Soru: Hangi IPC yapısını kullandın? 
+Cevap: Süreçler arası ortak durum için mmap ile shared memory, koordinasyon için named POSIX semaphore kullandım.
+Soru: Neden named semaphore kullandın? 
+Cevap: macOS tarafında süreçler arası daha güvenli ve uyumlu çalışması için sem_open ile named semaphore tercih ettim.
+Soru: Sorting veri yapısı nasıl? 
+Cevap: Her kelime için sorting_area, sorting_meta, occupied, fixed, char_claimed, char_delivered, char_in_transit gibi diziler tutuyorum; böylece hem taşıma hem sıralama state’i ayrı ayrı izleniyor.
+Soru: Aynı kelime üzerinde birden fazla sorter çakışmıyor mu? 
+Cevap: Her kelimenin kendi mutex’i ve ayrıca sorter’lar için sorter_lock var; böylece aynı anda tek sorter o kelimenin sorting state’ini güncelliyor.
+
+Zor
+
+Soru: Deadlock olmamasını nasıl sağladın? 
+Cevap: En kritik nokta floor capacity kontrolünde iki floor lock’ını hep sıralı almak; ben lo-hi düzeniyle kilitliyorum, böylece ters sıra deadlock riskini azaltıyorum.
+Soru: Race condition risklerini nasıl azalttın? 
+Cevap: Global sayaçlar için global_mutex, floor durumları için floor bazlı mutex, kelime içi state için word mutex kullandım; claim, admission, delivery ve completion geçişlerini korumalı yapıyorum.
+Soru: Bir karakter sorting floor’a geldiğinde ne oluyor? 
+Cevap: deliver_char önce boş ve fixed olmayan bir slot arıyor, karakteri oraya koyuyor, sorting_meta ile gerçek hedef indeksini işaretliyor ve ilgili floor’daki sorter’ları uyandırıyor.
+Soru: Sorting algoritmanda swap neden gerekli? 
+Cevap: Hedef slot boş değilse ama fixed de değilse swap ile karakterleri yer değiştiriyorum; bu, parçalı ilerlemeyi mümkün kılıyor ve doğru konuma yaklaşmayı hızlandırıyor.
+Soru: Sistem ne zaman bitti diyor? 
+Cevap: Her kelime için tüm fixed[] alanları 1 olduğunda completed set ediliyor; completed_words == total_words olunca parent çıkışa geçiyor.
+Soru: Floor’da hiç carrier kalmazsa ne yapıyorsun? 
+Cevap: Carrier floor değiştirince eski floor boş kaldıysa respawn_pending set ediliyor, parent parent_event ile uyanıyor ve o floor için yeni letter-carrier spawn edebiliyor.
+Soru: Reposition elevator neden ayrı? 
+Cevap: Delivery ve reposition isteklerini ayırarak veri taşıma ile boş gezen carrier yeniden konumlandırmasını bağımsızlaştırdım; bu hem mantığı sadeleştiriyor hem de beklemeleri karıştırmıyor.
+Soru: Elevator scheduling mantığın ne? 
+Cevap: Delivery tarafında SCAN benzeri yönlü seçim yapıyorum; aynı başlangıç floor’undan ve aynı yöndeki istekleri kapasite dahilinde batch topluyorum.
+Soru: Busy waiting var mı? 
+Cevap: Tam anlamıyla spin yok; event beklemelerinde semaphore kullanıyorum. macOS için timed wait tarafında sem_trywait + kısa sleep ile kontrollü polling yaptım.
+Soru: Output neden orijinal text alanından yazılıyor? 
+Cevap: Çünkü sorting tamamlandığında kelimenin doğru oluşturulduğunu state üzerinden garanti ediyorum; output dosyasında beklenen şey kelimenin kendisi ve sorting floor bilgisi, bu yüzden orijinal text’i floor/id sırasıyla yazıyorum.
+Mock Demo
+
+“Bu ödevde çoklu process tabanlı bir kelime taşıma ve concurrent sorting sistemi kurdum. Parent process shared memory ile tüm ortak durumu kuruyor ve diğer rolleri başlatıyor.”
+“Sistemde word-carrier’lar kelimeleri round-robin ile claim ediyor. Admission sırasında hem arrival floor hem sorting floor kapasitesini atomik olarak kontrol ediyorum.”
+“Kelime admitted olduktan sonra letter-carrier’lar ilgili floor’da taşınmamış karakter arıyor. Eğer hedef floor aynıysa direkt sorting area’ya bırakıyorlar.”
+“Hedef floor farklıysa delivery elevator kuyruğuna request atılıyor. Delivery elevator SCAN benzeri mantıkla aynı yöndeki istekleri batch halinde taşıyor.”
+“Karakter sorting floor’a bırakıldığında sorter process’ler devreye giriyor. Her karakterin doğru hedef indeksini sorting_meta ile takip ediyorum.”
+“Sorter’lar boş hedefe taşıma, dolu ama fixed olmayan hedefle swap ve doğru yerdeyse fix etme kurallarını uyguluyor. Böylece birden fazla sorter aynı floor’da paralel ilerleyebiliyor.”
+“Bir floor boş carrier’sız kalırsa parent bunu event üzerinden fark edip yeni letter-carrier spawn edebiliyor. Bu, sistemin ilerlemesini koruyor.”
+“Tüm kelimeler tamamlanınca parent output dosyasını üretiyor, özet istatistikleri yazdırıyor ve child process’leri temiz şekilde sonlandırıyor.”
+Kısa Savunma Cümleleri
+
+“Bu tasarımda ana hedefim process rollerini ayrıştırıp shared memory üzerinde kontrollü paralellik sağlamaktı.”
+“En kritik konu senkronizasyondu; o yüzden word, floor ve global seviyede ayrı koruma katmanları kullandım.”
+“Deadlock riskini özellikle çoklu floor lock alırken sabit sırayla kilitleyerek azalttım.”
+“Performans için elevator tarafında tekli taşıma yerine batch toplama kullandım.”

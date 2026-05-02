@@ -118,7 +118,7 @@ void delivery_elevator_loop(SharedState *st)
             if (ok)
                 safe_log("[PID:%d] Letter-carrier-process_%d brought char '%c' of word %d to floor %d\n",
                          (int)carrier->pid, req->carrier_slot, req->ch, w->word_id, req->to_floor);
-            unlock_sem(carrier->event_sem, "sem_post(carrier_event)");
+            signal_carrier_event(carrier);
         }
     }
     _exit(0);
@@ -150,7 +150,7 @@ void reposition_elevator_loop(SharedState *st)
             carrier->repositions++;
             safe_log("[PID:%d] Letter-carrier-process_%d resumed work on floor %d\n",
                      (int)carrier->pid, req->carrier_slot, req->to_floor);
-            unlock_sem(carrier->event_sem, "sem_post(carrier_event)");
+            signal_carrier_event(carrier);
         }
     }
     _exit(0);

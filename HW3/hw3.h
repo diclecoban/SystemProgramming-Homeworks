@@ -66,6 +66,7 @@ typedef struct {
     pid_t pid;
     int   current_floor, active, deliveries, repositions, direct_placements;
     sem_t *event_sem;
+    char  event_sem_name[64];
 } CarrierState;
 
 typedef struct { pid_t pid; int floor, tasks; }               SorterState;
@@ -105,6 +106,12 @@ extern int    g_sem_count;
 /* ── shared_memory.c ─────────────────────────────────────────────────── */
 void  fail(const char *fmt, ...);
 void  check_err(int rc, const char *what);
+void  checked_printf(const char *fmt, ...);
+void  checked_fprintf(FILE *stream, const char *fmt, ...);
+void  checked_fflush(FILE *stream, const char *what);
+void  checked_fclose(FILE *stream, const char *what);
+void  copy_string(char *dst, size_t dst_size, const char *src, const char *what);
+void  checked_snprintf(char *dst, size_t dst_size, const char *what, const char *fmt, ...);
 void  lock_sem(sem_t *sem, const char *what);
 void  unlock_sem(sem_t *sem, const char *what);
 void  init_semaphore(sem_t **sem, unsigned value);
@@ -113,6 +120,8 @@ void  msleep(long ms);
 unsigned make_seed(int salt);
 void  safe_log(const char *fmt, ...);
 int   wait_event(sem_t *sem, long timeout_ms);
+int   wait_carrier_event(CarrierState *carrier, long timeout_ms);
+void  signal_carrier_event(CarrierState *carrier);
 void  init_shared_state(SharedState *st, const Config *cfg);
 int   reserve_wcarrier_slot(SharedState *st, int floor);
 int   reserve_sorter_slot(SharedState *st, int floor);

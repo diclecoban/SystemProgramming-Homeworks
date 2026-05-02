@@ -20,6 +20,56 @@ void check_err(int rc, const char *what)
     if (rc == -1) fail("%s failed: %s", what, strerror(errno));
 }
 
+void checked_printf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    if (vprintf(fmt, ap) < 0) {
+        va_end(ap);
+        fail("vprintf(stdout) failed: %s", strerror(errno));
+    }
+    va_end(ap);
+}
+
+void checked_fprintf(FILE *stream, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    if (vfprintf(stream, fmt, ap) < 0) {
+        va_end(ap);
+        fail("vfprintf failed: %s", strerror(errno));
+    }
+    va_end(ap);
+}
+
+void checked_fflush(FILE *stream, const char *what)
+{
+    if (fflush(stream) == EOF) fail("%s failed: %s", what, strerror(errno));
+}
+
+void checked_fclose(FILE *stream, const char *what)
+{
+    if (fclose(stream) == EOF) fail("%s failed: %s", what, strerror(errno));
+}
+
+void copy_string(char *dst, size_t dst_size, const char *src, const char *what)
+{
+    if (!src) fail("%s source is NULL", what);
+    int rc = snprintf(dst, dst_size, "%s", src);
+    if (rc < 0) fail("%s snprintf failed: %s", what, strerror(errno));
+    if ((size_t)rc >= dst_size) fail("%s truncated", what);
+}
+
+void checked_snprintf(char *dst, size_t dst_size, const char *what, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vsnprintf(dst, dst_size, fmt, ap);
+    va_end(ap);
+    if (rc < 0) fail("%s vsnprintf failed: %s", what, strerror(errno));
+    if ((size_t)rc >= dst_size) fail("%s truncated", what);
+}
+
 /* ── Semaphore wrappers ──────────────────────────────────────────────── */
 void lock_sem(sem_t *sem, const char *what)
 {
@@ -38,11 +88,12 @@ void init_semaphore(sem_t **sem, unsigned value)
 {
     if (g_sem_count >= 4096) fail("Too many semaphores");
     char name[64];
-    snprintf(name, sizeof(name), "/hw3_%d_%d", (int)getpid(), g_sem_count);
-    sem_unlink(name);
+    checked_snprintf(name, sizeof(name), "semaphore name", "/hw3_%d_%d", (int)getpid(), g_sem_count);
+    if (sem_unlink(name) == -1 && errno != ENOENT)
+        fail("sem_unlink(%s): %s", name, strerror(errno));
     sem_t *s = sem_open(name, O_CREAT | O_EXCL, 0600, value);
     if (s == SEM_FAILED) fail("sem_open(%s): %s", name, strerror(errno));
-    strncpy(g_sem_names[g_sem_count], name, 63);
+    copy_string(g_sem_names[g_sem_count], sizeof(g_sem_names[g_sem_count]), name, "g_sem_names");
     g_sem_ptrs[g_sem_count] = s;
     *sem = s;
     g_sem_count++;
@@ -52,8 +103,9 @@ void cleanup_named_sems(void)
 {
     for (int i = g_sem_count - 1; i >= 0; --i) {
         if (g_sem_ptrs[i] && g_sem_ptrs[i] != SEM_FAILED)
-            sem_close(g_sem_ptrs[i]);
-        if (g_sem_names[i][0]) sem_unlink(g_sem_names[i]);
+            check_err(sem_close(g_sem_ptrs[i]), "sem_close");
+        if (g_sem_names[i][0] && sem_unlink(g_sem_names[i]) == -1 && errno != ENOENT)
+            fail("sem_unlink(%s): %s", g_sem_names[i], strerror(errno));
     }
 }
 
@@ -75,7 +127,12 @@ void safe_log(const char *fmt, ...)
     if (!g_state) return;
     lock_sem(g_state->print_mutex, "sem_wait(print_mutex)");
     va_list ap; va_start(ap, fmt);
-    vprintf(fmt, ap); va_end(ap); fflush(stdout);
+    if (vprintf(fmt, ap) < 0) {
+        va_end(ap);
+        fail("vprintf(stdout) failed: %s", strerror(errno));
+    }
+    va_end(ap);
+    checked_fflush(stdout, "fflush(stdout)");
     unlock_sem(g_state->print_mutex, "sem_post(print_mutex)");
 }
 
@@ -125,6 +182,31 @@ int wait_event(sem_t *sem, long timeout_ms)
 #endif
 }
 
+static sem_t *open_carrier_event_sem(CarrierState *carrier)
+{
+    if (!carrier->event_sem_name[0])
+        fail("carrier event semaphore name is missing");
+    sem_t *sem = sem_open(carrier->event_sem_name, 0);
+    if (sem == SEM_FAILED)
+        fail("sem_open(%s): %s", carrier->event_sem_name, strerror(errno));
+    return sem;
+}
+
+int wait_carrier_event(CarrierState *carrier, long timeout_ms)
+{
+    sem_t *sem = open_carrier_event_sem(carrier);
+    int rc = wait_event(sem, timeout_ms);
+    check_err(sem_close(sem), "sem_close(carrier_event)");
+    return rc;
+}
+
+void signal_carrier_event(CarrierState *carrier)
+{
+    sem_t *sem = open_carrier_event_sem(carrier);
+    unlock_sem(sem, "sem_post(carrier_event)");
+    check_err(sem_close(sem), "sem_close(carrier_event)");
+}
+
 /* ── Shared state init ───────────────────────────────────────────────── */
 void init_shared_state(SharedState *st, const Config *cfg)
 {
@@ -143,8 +225,6 @@ void init_shared_state(SharedState *st, const Config *cfg)
         init_semaphore(&st->floors[i].mutex, 1);
         init_semaphore(&st->floor_delivery_sem[i], 0);
     }
-    for (int i = 0; i < MAX_CARRIERS; ++i)
-        init_semaphore(&st->carriers[i].event_sem, 0);
 }
 
 /* ── Slot reservation ────────────────────────────────────────────────── */
@@ -180,6 +260,8 @@ int reserve_carrier_slot(SharedState *st, int floor)
         slot = st->next_carrier_slot++;
         CarrierState *c = &st->carriers[slot];
         c->current_floor = floor; c->active = 1;
+        init_semaphore(&c->event_sem, 0);
+        copy_string(c->event_sem_name, sizeof(c->event_sem_name), g_sem_names[g_sem_count - 1], "carrier event semaphore name");
         lock_sem(st->floors[floor].mutex, "sem_wait(floor_mutex)");
         st->floors[floor].carrier_count++;
         st->respawn_pending[floor] = 0;
@@ -302,13 +384,13 @@ void load_input(SharedState *st)
         SharedWord *w = &st->words[st->total_words++];
         memset(w, 0, sizeof(*w));
         w->word_id = id; w->sorting_floor = sf;
-        strncpy(w->text, word, sizeof(w->text) - 1);
+        copy_string(w->text, sizeof(w->text), word, "word text");
         w->length = (int)strlen(w->text);
         for (int i = 0; i < w->length; ++i) w->sorting_meta[i] = -1;
         init_semaphore(&w->mutex, 1);
         init_semaphore(&w->sorter_lock, 1);
     }
-    fclose(fp);
+    checked_fclose(fp, "fclose(input)");
     if (!st->total_words) fail("Input file is empty");
 }
 
@@ -328,9 +410,10 @@ void write_output(SharedState *st)
     FILE *fp = fopen(st->cfg.output_path, "w");
     if (!fp) fail("Cannot create output: %s", strerror(errno));
     for (int i = 0; i < st->total_words; ++i)
-        fprintf(fp, "%d %s %d\n",
-                ordered[i]->word_id, ordered[i]->text, ordered[i]->sorting_floor);
-    fclose(fp);
+        checked_fprintf(fp, "%d %s %d\n",
+                        ordered[i]->word_id, ordered[i]->text, ordered[i]->sorting_floor);
+    checked_fflush(fp, "fflush(output)");
+    checked_fclose(fp, "fclose(output)");
     st->output_generated = 1;
 }
 
