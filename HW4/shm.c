@@ -1,5 +1,6 @@
 #include "shm.h"
 
+/* Initializes a mutex for process-shared use. */
 static void init_pshared_mutex(pthread_mutex_t *mutex) {
     pthread_mutexattr_t attr;
     if (pthread_mutexattr_init(&attr) != 0) {
@@ -14,6 +15,7 @@ static void init_pshared_mutex(pthread_mutex_t *mutex) {
     pthread_mutexattr_destroy(&attr);
 }
 
+/* Initializes a condition variable for process-shared use. */
 static void init_pshared_cond(pthread_cond_t *cond) {
     pthread_condattr_t attr;
     if (pthread_condattr_init(&attr) != 0) {
@@ -28,10 +30,12 @@ static void init_pshared_cond(pthread_cond_t *cond) {
     pthread_condattr_destroy(&attr);
 }
 
+/* Creates all shared memory regions and their synchronization objects. */
 int init_shared_regions(shared_regions_t *shared, const program_options_t *opts) {
     int i;
 
     memset(shared, 0, sizeof(*shared));
+
     shared->region_a_size = sizeof(region_a_t) + (size_t)opts->capacity_a * sizeof(log_entry_t);
     shared->region_b_size = sizeof(region_b_level_t) + (size_t)opts->capacity_b * sizeof(log_entry_t);
     shared->region_c_size = sizeof(region_c_t);
@@ -50,6 +54,7 @@ int init_shared_regions(shared_regions_t *shared, const program_options_t *opts)
     init_pshared_cond(&shared->region_a->not_empty_a);
 
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         shared->region_b[i] = mmap(NULL, shared->region_b_size, PROT_READ | PROT_WRITE,
                                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         if (shared->region_b[i] == MAP_FAILED) {
@@ -71,6 +76,7 @@ int init_shared_regions(shared_regions_t *shared, const program_options_t *opts)
     init_pshared_mutex(&shared->region_c->result_mutex);
     init_pshared_cond(&shared->region_c->result_cond);
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         if (hw_sem_init(&shared->region_c->level_ready[i], 1, 0) != 0) {
             die_errno("hw_sem_init");
         }
@@ -92,6 +98,7 @@ int init_shared_regions(shared_regions_t *shared, const program_options_t *opts)
     return 0;
 }
 
+/* Destroys synchronization objects and unmaps all shared memory regions. */
 void destroy_shared_regions(shared_regions_t *shared) {
     int i;
     if (shared->region_a != NULL) {

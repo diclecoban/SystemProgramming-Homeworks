@@ -1,5 +1,6 @@
 #include "watchdog.h"
 
+/* Counts how many tracked child processes are still alive. */
 static int count_alive_children(const pid_t *child_pids, int child_count) {
     int i;
     int alive = 0;
@@ -11,6 +12,7 @@ static int count_alive_children(const pid_t *child_pids, int child_count) {
     return alive;
 }
 
+/* Monitors reader heartbeat pipes and prints progress updates. */
 void *watchdog_thread_main(void *arg) {
     watchdog_args_t *ctx = arg;
     int *progress = calloc((size_t)ctx->opts->num_files, sizeof(int));
@@ -31,6 +33,7 @@ void *watchdog_thread_main(void *arg) {
 
         FD_ZERO(&readfds);
         for (i = 0; i < ctx->opts->num_files; ++i) {
+
             if (ctx->pipe_fds[i] < 0) {
                 continue;
             }
@@ -53,6 +56,7 @@ void *watchdog_thread_main(void *arg) {
                     char buf[256];
                     ssize_t n = read(ctx->pipe_fds[i], buf, sizeof(buf) - 1);
                     if (n > 0) {
+
                         char *saveptr = NULL;
                         char *line;
                         buf[n] = '\0';
@@ -67,6 +71,7 @@ void *watchdog_thread_main(void *arg) {
                             line = strtok_r(NULL, "\n", &saveptr);
                         }
                     } else if (n == 0) {
+
                         close(ctx->pipe_fds[i]);
                         ctx->pipe_fds[i] = -1;
                     }
@@ -76,6 +81,7 @@ void *watchdog_thread_main(void *arg) {
 
         now = time(NULL);
         if (now >= next_print) {
+
             fprintf(stderr, "[WATCHDOG] Progress at T+%lds:", (long)(now - start));
             for (i = 0; i < ctx->opts->num_files; ++i) {
                 fprintf(stderr, " Reader %d=%d", i, progress[i]);

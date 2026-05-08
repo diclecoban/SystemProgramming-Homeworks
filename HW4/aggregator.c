@@ -5,6 +5,7 @@ typedef struct {
     double score;
 } level_sort_item_t;
 
+/* Compares two level results for descending score order. */
 static int cmp_level_desc(const void *a, const void *b) {
     const level_sort_item_t *lhs = a;
     const level_sort_item_t *rhs = b;
@@ -17,7 +18,9 @@ static int cmp_level_desc(const void *a, const void *b) {
     return lhs->level_index - rhs->level_index;
 }
 
+/* Consumes Region D and computes the high-priority score. */
 static void aggregate_high_priority(aggregator_process_args_t *args) {
+
     region_d_t *region_d = args->shared->region_d;
     while (1) {
         log_entry_t entry;
@@ -25,6 +28,7 @@ static void aggregate_high_priority(aggregator_process_args_t *args) {
         int done = 0;
 
         pthread_mutex_lock(&region_d->priority_mutex);
+
         while (region_d->count == 0 && !region_d->dispatcher_done) {
             struct timespec ts;
             timed_wait_seconds(&ts, args->opts->timeout_sec);
@@ -35,6 +39,7 @@ static void aggregate_high_priority(aggregator_process_args_t *args) {
         if (region_d->count == 0 && region_d->dispatcher_done) {
             done = 1;
         } else if (region_d->count > 0) {
+
             entry = region_d->entries[region_d->head];
             region_d->head = (region_d->head + 1) % region_d->capacity;
             region_d->count--;
@@ -52,6 +57,7 @@ static void aggregate_high_priority(aggregator_process_args_t *args) {
             continue;
         }
         for (i = 0; i < args->opts->num_keywords; ++i) {
+
             long hits = count_overlapping_keyword(entry.message, args->opts->keywords[i]);
             args->shared->region_c->high_priority_score +=
                 (double)hits * (double)level_weight(entry.level_index);
@@ -60,6 +66,7 @@ static void aggregate_high_priority(aggregator_process_args_t *args) {
     }
 }
 
+/* Writes the final human-readable report file. */
 static void write_text_output(aggregator_process_args_t *args) {
     FILE *fp;
     int i, k;
@@ -78,6 +85,7 @@ static void write_text_output(aggregator_process_args_t *args) {
     fprintf(fp, "\n");
     fprintf(fp, "FILES: %d\n", args->opts->num_files);
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         total_weighted += args->shared->region_c->results[i].total_weighted_score;
         items[i].level_index = i;
         items[i].score = args->shared->region_c->results[i].total_weighted_score;
@@ -94,6 +102,7 @@ static void write_text_output(aggregator_process_args_t *args) {
     fprintf(fp, "\n");
 
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         level_result_t *r = &args->shared->region_c->results[items[i].level_index];
         fprintf(fp, "%-7s  %7ld  %14.1f", r->level, r->total_entries, r->total_weighted_score);
         for (k = 0; k < args->opts->num_keywords; ++k) {
@@ -104,6 +113,7 @@ static void write_text_output(aggregator_process_args_t *args) {
 
     fprintf(fp, "# Top-3 sources per level\n");
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         level_result_t *r = &args->shared->region_c->results[i];
         fprintf(fp, "  %s %s:%ld %s:%ld %s:%ld\n",
                 r->level,
@@ -114,6 +124,7 @@ static void write_text_output(aggregator_process_args_t *args) {
 
     fprintf(fp, "# Per-thread contributions (weighted score)\n");
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         level_result_t *r = &args->shared->region_c->results[i];
         fprintf(fp, "  %s", r->level);
         for (k = 0; k < args->opts->worker_threads; ++k) {
@@ -125,6 +136,7 @@ static void write_text_output(aggregator_process_args_t *args) {
     fclose(fp);
 }
 
+/* Writes the final binary checkpoint file. */
 static void write_binary_output(aggregator_process_args_t *args) {
     FILE *fp;
     char tmp_path[MAX_PATH_LEN + 8];
@@ -163,6 +175,7 @@ static void write_binary_output(aggregator_process_args_t *args) {
     }
 }
 
+/* Waits for analyzer results and writes all final outputs. */
 void run_aggregator_process(aggregator_process_args_t *args) {
     int ready_levels = 0;
     int i;
@@ -173,6 +186,7 @@ void run_aggregator_process(aggregator_process_args_t *args) {
     for (i = 0; i < MAX_LEVELS; ++i) {
         struct timespec ts;
         pthread_mutex_lock(&args->shared->region_c->result_mutex);
+
         while (!args->shared->region_c->results[i].ready) {
             timed_wait_seconds(&ts, args->opts->timeout_sec);
             if (pthread_cond_timedwait(&args->shared->region_c->result_cond,
@@ -181,6 +195,7 @@ void run_aggregator_process(aggregator_process_args_t *args) {
             }
         }
         pthread_mutex_unlock(&args->shared->region_c->result_mutex);
+
         hw_sem_wait(&args->shared->region_c->level_ready[i]);
         printf("[PID:%d] %s result received.\n", getpid(), level_name(i));
         ready_levels++;

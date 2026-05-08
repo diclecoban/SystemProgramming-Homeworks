@@ -12,6 +12,7 @@ typedef struct {
     int count;
 } child_list_t;
 
+/* Marks a finished child process so it is not signaled again. */
 static void mark_child_reaped(child_list_t *children, pid_t pid) {
     int i;
     for (i = 0; i < children->count; ++i) {
@@ -22,6 +23,7 @@ static void mark_child_reaped(child_list_t *children, pid_t pid) {
     }
 }
 
+/* Stops all tracked child processes during shutdown. */
 static void terminate_children(child_list_t *children, int timeout_sec) {
     time_t deadline = time(NULL) + timeout_sec;
     int i;
@@ -65,11 +67,13 @@ static void terminate_children(child_list_t *children, int timeout_sec) {
     }
 }
 
+/* Records that Ctrl+C was received without doing unsafe signal work. */
 static void sigint_handler(int signo) {
     (void)signo;
     g_sigint_received = 1;
 }
 
+/* Installs the SIGINT handler for the parent process. */
 static void install_sigint_handler(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -81,6 +85,7 @@ static void install_sigint_handler(void) {
     }
 }
 
+/* Prints the expected command-line usage format. */
 static void usage(const char *prog) {
     fprintf(stderr,
             "Usage: %s -c <config> -f <filter> -k <keywords> -t <reader_threads> "
@@ -89,6 +94,7 @@ static void usage(const char *prog) {
             prog);
 }
 
+/* Splits the comma-separated keyword argument into the options structure. */
 static void parse_keywords(program_options_t *opts, const char *arg) {
     char buf[512];
     char *saveptr = NULL;
@@ -110,6 +116,7 @@ static void parse_keywords(program_options_t *opts, const char *arg) {
     }
 }
 
+/* Loads file paths from a line-based config file. */
 static void load_file_paths(const char *path, char out[][MAX_PATH_LEN], int *count, int max_count) {
     FILE *fp = fopen(path, "r");
     char line[MAX_PATH_LEN];
@@ -130,6 +137,7 @@ static void load_file_paths(const char *path, char out[][MAX_PATH_LEN], int *cou
     fclose(fp);
 }
 
+/* Loads high-priority source names from the filter file. */
 static void load_sources_simple(const char *path, char out[][64], int *count, int max_count) {
     FILE *fp = fopen(path, "r");
     char line[128];
@@ -151,6 +159,7 @@ static void load_sources_simple(const char *path, char out[][64], int *count, in
     fclose(fp);
 }
 
+/* Parses and validates command-line arguments for the program. */
 static void parse_args(int argc, char **argv, program_options_t *opts) {
     int ch;
     memset(opts, 0, sizeof(*opts));
@@ -213,6 +222,7 @@ static void parse_args(int argc, char **argv, program_options_t *opts) {
     }
 }
 
+/* Starts a reader child process for one input log file. */
 static pid_t fork_reader(program_options_t *opts, shared_regions_t *shared, int reader_id, int write_fd) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -231,6 +241,7 @@ static pid_t fork_reader(program_options_t *opts, shared_regions_t *shared, int 
     return pid;
 }
 
+/* Starts the dispatcher child process. */
 static pid_t fork_dispatcher(program_options_t *opts, shared_regions_t *shared) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -244,6 +255,7 @@ static pid_t fork_dispatcher(program_options_t *opts, shared_regions_t *shared) 
     return pid;
 }
 
+/* Starts an analyzer child process for one log level. */
 static pid_t fork_analyzer(program_options_t *opts, shared_regions_t *shared, int level_index) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -257,6 +269,7 @@ static pid_t fork_analyzer(program_options_t *opts, shared_regions_t *shared, in
     return pid;
 }
 
+/* Starts the aggregator child process. */
 static pid_t fork_aggregator(program_options_t *opts, shared_regions_t *shared) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -270,6 +283,7 @@ static pid_t fork_aggregator(program_options_t *opts, shared_regions_t *shared) 
     return pid;
 }
 
+/* Initializes the program, starts all workers, waits for completion, and prints the final summary. */
 int main(int argc, char **argv) {
     program_options_t opts;
     shared_regions_t shared;
@@ -300,6 +314,7 @@ int main(int argc, char **argv) {
            getpid(), opts.capacity_a, opts.capacity_b, opts.capacity_d);
 
     for (i = 0; i < opts.num_files; ++i) {
+
         if (pipe(pipe_fds[i]) != 0) {
             die_errno("pipe");
         }
@@ -315,6 +330,7 @@ int main(int argc, char **argv) {
     children.pids[children.count++] = fork_dispatcher(&opts, &shared);
 
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         printf("[PID:%d] Forking Analyzer %s (index %d)\n", getpid(), level_name(i), i);
         fflush(stdout);
         children.pids[children.count++] = fork_analyzer(&opts, &shared, i);
@@ -337,6 +353,7 @@ int main(int argc, char **argv) {
         pid_t pid = waitpid(-1, &status, 0);
         if (pid < 0) {
             if (errno == EINTR && g_sigint_received) {
+
                 terminate_children(&children, 5);
                 shutdown_watchdog = 1;
                 pthread_join(watchdog_thread, NULL);
@@ -356,6 +373,7 @@ int main(int argc, char **argv) {
     pthread_join(watchdog_thread, NULL);
 
     for (i = 0; i < MAX_LEVELS; ++i) {
+
         total_entries += shared.region_c->results[i].total_entries;
         total_weighted += shared.region_c->results[i].total_weighted_score;
     }

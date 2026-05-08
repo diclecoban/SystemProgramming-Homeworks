@@ -20,6 +20,7 @@ typedef struct {
     int dispatched[MAX_LEVELS];
 } parser_thread_arg_t;
 
+/* Initializes the reader process private buffer. */
 static void private_buffer_init(private_buffer_t *buffer, int capacity) {
     memset(buffer, 0, sizeof(*buffer));
     buffer->capacity = capacity;
@@ -32,6 +33,7 @@ static void private_buffer_init(private_buffer_t *buffer, int capacity) {
     pthread_cond_init(&buffer->not_empty, NULL);
 }
 
+/* Releases the resources owned by the private buffer. */
 static void private_buffer_destroy(private_buffer_t *buffer) {
     pthread_mutex_destroy(&buffer->mutex);
     pthread_cond_destroy(&buffer->not_full);
@@ -39,8 +41,10 @@ static void private_buffer_destroy(private_buffer_t *buffer) {
     free(buffer->entries);
 }
 
+/* Adds one parsed entry to the private buffer. */
 static void private_buffer_push(private_buffer_t *buffer, const log_entry_t *entry) {
     pthread_mutex_lock(&buffer->mutex);
+
     while (buffer->count == buffer->capacity) {
         pthread_cond_wait(&buffer->not_full, &buffer->mutex);
     }
@@ -51,6 +55,7 @@ static void private_buffer_push(private_buffer_t *buffer, const log_entry_t *ent
     pthread_mutex_unlock(&buffer->mutex);
 }
 
+/* Removes one entry from the private buffer for the parser thread. */
 static int private_buffer_pop(private_buffer_t *buffer, log_entry_t *entry) {
     int should_continue = 1;
     pthread_mutex_lock(&buffer->mutex);
@@ -69,6 +74,7 @@ static int private_buffer_pop(private_buffer_t *buffer, log_entry_t *entry) {
     return should_continue;
 }
 
+/* Sends periodic reader progress messages to the watchdog pipe. */
 static void send_heartbeat(int fd, int reader_id, long lines) {
     char buf[128];
     int len;
@@ -81,6 +87,7 @@ static void send_heartbeat(int fd, int reader_id, long lines) {
     }
 }
 
+/* Reads and parses the assigned byte range of a log file. */
 static void *reader_thread_main(void *arg) {
     reader_thread_arg_t *ctx = arg;
     FILE *fp;
@@ -103,6 +110,7 @@ static void *reader_thread_main(void *arg) {
 
     if (ctx->start_offset > 0) {
         int ch;
+
         if (fseeko(fp, ctx->start_offset - 1, SEEK_SET) != 0) {
             die_errno("reader thread boundary fseeko");
         }
@@ -149,6 +157,7 @@ static void *reader_thread_main(void *arg) {
     return NULL;
 }
 
+/* Adds an entry or EOF marker to shared Region A. */
 static void push_region_a(region_a_t *region_a, const log_entry_t *entry) {
     pthread_mutex_lock(&region_a->input_mutex);
     while (region_a->count == region_a->capacity) {
@@ -158,12 +167,14 @@ static void push_region_a(region_a_t *region_a, const log_entry_t *entry) {
     region_a->tail = (region_a->tail + 1) % region_a->capacity;
     region_a->count++;
     if (entry->is_eof) {
+
         region_a->eof_count_per_level[entry->level_index]++;
     }
     pthread_cond_signal(&region_a->not_empty_a);
     pthread_mutex_unlock(&region_a->input_mutex);
 }
 
+/* Moves parsed entries from the private buffer into Region A. */
 static void *parser_thread_main(void *arg) {
     parser_thread_arg_t *ctx = arg;
     log_entry_t entry;
@@ -175,6 +186,7 @@ static void *parser_thread_main(void *arg) {
     }
 
     for (level = 0; level < MAX_LEVELS; ++level) {
+
         memset(&entry, 0, sizeof(entry));
         entry.is_eof = 1;
         entry.level_index = level;
@@ -189,6 +201,7 @@ static void *parser_thread_main(void *arg) {
     return NULL;
 }
 
+/* Runs the full reader process workflow for one log file. */
 void run_reader_process(reader_process_args_t *args) {
     struct stat st;
     off_t file_size;
@@ -218,10 +231,12 @@ void run_reader_process(reader_process_args_t *args) {
     parser_arg.proc_args = args;
     parser_arg.buffer = &buffer;
     memset(parser_arg.dispatched, 0, sizeof(parser_arg.dispatched));
+
     pthread_create(&parser_thread, NULL, parser_thread_main, &parser_arg);
 
     chunk = (file_size + args->opts->reader_threads - 1) / args->opts->reader_threads;
     for (i = 0; i < args->opts->reader_threads; ++i) {
+
         thread_args[i].proc_args = args;
         thread_args[i].buffer = &buffer;
         thread_args[i].start_offset = i * chunk;
@@ -239,6 +254,7 @@ void run_reader_process(reader_process_args_t *args) {
     }
 
     pthread_mutex_lock(&buffer.mutex);
+
     buffer.producers_done = 1;
     pthread_cond_broadcast(&buffer.not_empty);
     pthread_mutex_unlock(&buffer.mutex);

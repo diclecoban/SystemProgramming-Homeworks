@@ -23,6 +23,7 @@ typedef struct {
     int worker_index;
 } tls_payload_t;
 
+/* Stores worker thread local scores into shared Region C before the thread exits. */
 static void tls_destructor(void *ptr) {
     tls_payload_t *payload = ptr;
     int k;
@@ -53,6 +54,7 @@ static void tls_destructor(void *ptr) {
     free(payload);
 }
 
+/* Reads the next entry from the analyzer level queue. */
 static int pop_level_entry(region_b_level_t *region_b, log_entry_t *entry) {
     pthread_mutex_lock(&region_b->level_mutex);
     while (region_b->count == 0 && !region_b->eof_posted) {
@@ -70,6 +72,7 @@ static int pop_level_entry(region_b_level_t *region_b, log_entry_t *entry) {
     return 1;
 }
 
+/* Updates the accumulated score for one source. */
 static void update_source_hits(worker_arg_t *ctx, const char *source, long hits) {
     int i;
     pthread_mutex_lock(ctx->local_mutex);
@@ -89,6 +92,7 @@ static void update_source_hits(worker_arg_t *ctx, const char *source, long hits)
     pthread_mutex_unlock(ctx->local_mutex);
 }
 
+/* Finds the top three scoring sources for the analyzer level. */
 static void compute_top3(worker_arg_t *ctx) {
     int i, j;
     level_result_t *result = &ctx->proc_args->shared->region_c->results[ctx->proc_args->level_index];
@@ -99,6 +103,7 @@ static void compute_top3(worker_arg_t *ctx) {
         for (j = 0; j < 3; ++j) {
             if (ctx->source_hits[i] > best_hits[j]) {
                 int move;
+
                 for (move = 2; move > j; --move) {
                     best_hits[move] = best_hits[move - 1];
                     strncpy(best_names[move], best_names[move - 1], sizeof(best_names[move]) - 1);
@@ -118,6 +123,7 @@ static void compute_top3(worker_arg_t *ctx) {
     pthread_mutex_unlock(&ctx->proc_args->shared->region_c->result_mutex);
 }
 
+/* Processes Region B entries and computes keyword scores for one worker thread. */
 static void *worker_main(void *arg) {
     worker_arg_t *ctx = arg;
     tls_payload_t *payload;
@@ -147,12 +153,14 @@ static void *worker_main(void *arg) {
     while (1) {
         log_entry_t entry;
         double total_for_entry = 0.0;
+
         if (!pop_level_entry(region_b, &entry)) {
             break;
         }
 
         ctx->entries_per_worker[ctx->worker_index]++;
         for (k = 0; k < ctx->proc_args->opts->num_keywords; ++k) {
+
             long matches = count_overlapping_keyword(entry.message, ctx->proc_args->opts->keywords[k]);
             if (matches > 0) {
                 double weighted = (double)matches * (double)level_weight(ctx->proc_args->level_index);
@@ -162,6 +170,7 @@ static void *worker_main(void *arg) {
             }
         }
         if (total_for_entry > 0.0) {
+
             update_source_hits(ctx, entry.source, (long)total_for_entry);
         }
     }
@@ -170,10 +179,12 @@ static void *worker_main(void *arg) {
            getpid(), tid, ctx->worker_index, ctx->entries_per_worker[ctx->worker_index], thread_total);
 
     pthread_barrier_wait(ctx->barrier);
+
     pthread_exit(NULL);
     return NULL;
 }
 
+/* Runs all worker threads for one log level and publishes the result. */
 void run_analyzer_process(analyzer_process_args_t *args) {
     pthread_t workers[MAX_WORKERS];
     worker_arg_t worker_args[MAX_WORKERS];
@@ -198,6 +209,7 @@ void run_analyzer_process(analyzer_process_args_t *args) {
     pthread_mutex_init(&local_mutex, NULL);
 
     for (i = 0; i < args->opts->worker_threads; ++i) {
+
         worker_args[i].proc_args = args;
         worker_args[i].barrier = &barrier;
         worker_args[i].tls_key = &tls_key;
@@ -217,6 +229,7 @@ void run_analyzer_process(analyzer_process_args_t *args) {
 
     lowest_tid = tids[0];
     for (i = 1; i < args->opts->worker_threads; ++i) {
+
         if (tids[i] < lowest_tid) {
             lowest_tid = tids[i];
             reporter_index = i;
@@ -227,6 +240,7 @@ void run_analyzer_process(analyzer_process_args_t *args) {
     result = &args->shared->region_c->results[args->level_index];
 
     pthread_mutex_lock(&args->shared->region_c->result_mutex);
+
     result->ready = 1;
     pthread_cond_broadcast(&args->shared->region_c->result_cond);
     pthread_mutex_unlock(&args->shared->region_c->result_mutex);

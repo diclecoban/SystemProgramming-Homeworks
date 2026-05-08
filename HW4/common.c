@@ -3,6 +3,7 @@
 
 volatile sig_atomic_t g_sigint_received = 0;
 
+/* Returns the text name of a log level. */
 const char *level_name(int level) {
     switch (level) {
         case LEVEL_ERROR:
@@ -18,6 +19,7 @@ const char *level_name(int level) {
     }
 }
 
+/* Returns the scoring weight for a log level. */
 int level_weight(int level) {
     switch (level) {
         case LEVEL_ERROR:
@@ -33,6 +35,7 @@ int level_weight(int level) {
     }
 }
 
+/* Converts a level string into the internal level index. */
 int parse_level(const char *level_str) {
     if (strcmp(level_str, "ERROR") == 0) {
         return LEVEL_ERROR;
@@ -49,6 +52,7 @@ int parse_level(const char *level_str) {
     return LEVEL_INVALID;
 }
 
+/* Removes trailing newline characters from a string. */
 void trim_newline(char *s) {
     size_t len = strlen(s);
     while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
@@ -57,6 +61,7 @@ void trim_newline(char *s) {
     }
 }
 
+/* Parses one log line into a log_entry_t structure. */
 int parse_log_line(const char *line, log_entry_t *entry) {
     const char *p = line;
     const char *end;
@@ -72,10 +77,12 @@ int parse_log_line(const char *line, log_entry_t *entry) {
     if (*p != '[') {
         return 0;
     }
+
     end = strchr(p + 1, ']');
     if (end == NULL || (size_t)(end - (p + 1)) != sizeof(entry->timestamp) - 1) {
         return 0;
     }
+
     memcpy(entry->timestamp, p + 1, sizeof(entry->timestamp) - 1);
     entry->timestamp[sizeof(entry->timestamp) - 1] = '\0';
     p = end + 1;
@@ -86,6 +93,7 @@ int parse_log_line(const char *line, log_entry_t *entry) {
     if (*p != '[') {
         return 0;
     }
+
     end = strchr(p + 1, ']');
     if (end == NULL) {
         return 0;
@@ -108,6 +116,7 @@ int parse_log_line(const char *line, log_entry_t *entry) {
     if (*p != '[') {
         return 0;
     }
+
     end = strchr(p + 1, ']');
     if (end == NULL) {
         return 0;
@@ -128,6 +137,7 @@ int parse_log_line(const char *line, log_entry_t *entry) {
     while (*p == ' ' || *p == '\t') {
         p++;
     }
+
     strncpy(entry->message, p, sizeof(entry->message) - 1);
     entry->message[sizeof(entry->message) - 1] = '\0';
     trim_newline(entry->message);
@@ -135,6 +145,7 @@ int parse_log_line(const char *line, log_entry_t *entry) {
     return 1;
 }
 
+/* Counts all keyword matches in a message, including overlapping matches. */
 long count_overlapping_keyword(const char *haystack, const char *needle) {
     size_t nlen;
     size_t hlen;
@@ -159,16 +170,19 @@ long count_overlapping_keyword(const char *haystack, const char *needle) {
     return count;
 }
 
+/* Prints a system error message and exits the program. */
 void die_errno(const char *msg) {
     fprintf(stderr, "%s: %s\n", msg, strerror(errno));
     exit(EXIT_FAILURE);
 }
 
+/* Prints a custom error message and exits the program. */
 void die_message(const char *msg) {
     fprintf(stderr, "%s\n", msg);
     exit(EXIT_FAILURE);
 }
 
+/* Builds an absolute timeout value for timed condition waits. */
 int timed_wait_seconds(struct timespec *ts, int timeout_sec) {
     if (clock_gettime(CLOCK_REALTIME, ts) != 0) {
         return -1;

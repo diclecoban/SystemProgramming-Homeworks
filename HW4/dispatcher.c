@@ -1,5 +1,6 @@
 #include "dispatcher.h"
 
+/* Checks whether a source is in the high-priority filter list. */
 static int source_is_priority(const program_options_t *opts, const char *source) {
     int i;
     for (i = 0; i < opts->num_priority_sources; ++i) {
@@ -10,6 +11,7 @@ static int source_is_priority(const program_options_t *opts, const char *source)
     return 0;
 }
 
+/* Reads the next entry from Region A with timeout support. */
 static int pop_region_a(region_a_t *region_a, log_entry_t *entry, int timeout_sec, int *timed_out) {
     struct timespec ts;
     int rc = 0;
@@ -17,6 +19,7 @@ static int pop_region_a(region_a_t *region_a, log_entry_t *entry, int timeout_se
     *timed_out = 0;
     pthread_mutex_lock(&region_a->input_mutex);
     while (region_a->count == 0) {
+
         if (timed_wait_seconds(&ts, timeout_sec) != 0) {
             pthread_mutex_unlock(&region_a->input_mutex);
             return -1;
@@ -36,6 +39,7 @@ static int pop_region_a(region_a_t *region_a, log_entry_t *entry, int timeout_se
     return 1;
 }
 
+/* Writes an entry into the Region B queue for its log level. */
 static void push_region_b(region_b_level_t *region_b, const log_entry_t *entry) {
     pthread_mutex_lock(&region_b->level_mutex);
     while (region_b->count == region_b->capacity) {
@@ -48,6 +52,7 @@ static void push_region_b(region_b_level_t *region_b, const log_entry_t *entry) 
     pthread_mutex_unlock(&region_b->level_mutex);
 }
 
+/* Writes a high-priority entry copy into Region D. */
 static void push_region_d(region_d_t *region_d, const log_entry_t *entry) {
     pthread_mutex_lock(&region_d->priority_mutex);
     while (region_d->count == region_d->capacity) {
@@ -60,6 +65,7 @@ static void push_region_d(region_d_t *region_d, const log_entry_t *entry) {
     pthread_mutex_unlock(&region_d->priority_mutex);
 }
 
+/* Routes entries from Region A to Region B and Region D. */
 void run_dispatcher_process(dispatcher_process_args_t *args) {
     int eof_seen[MAX_LEVELS] = {0};
     int finished_levels = 0;
@@ -93,6 +99,7 @@ void run_dispatcher_process(dispatcher_process_args_t *args) {
         }
 
         if (entry.is_eof) {
+
             eof_seen[entry.level_index]++;
             if (eof_seen[entry.level_index] == args->opts->num_files &&
                 !args->shared->region_b[entry.level_index]->eof_posted) {
@@ -106,7 +113,9 @@ void run_dispatcher_process(dispatcher_process_args_t *args) {
         }
 
         push_region_b(args->shared->region_b[entry.level_index], &entry);
+
         if (source_is_priority(args->opts, entry.source)) {
+
             push_region_d(args->shared->region_d, &entry);
             printf("[PID:%d] Routed entry to %s buffer. High-priority: YES (source: %s)\n",
                    getpid(), level_name(entry.level_index), entry.source);
